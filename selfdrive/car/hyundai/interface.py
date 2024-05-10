@@ -312,8 +312,8 @@ class CarInterface(CarInterfaceBase):
         be.type = ButtonType.decelCruise
       elif but == Buttons.GAP_DIST:
         be.type = ButtonType.gapAdjustCruise
-      #elif but == Buttons.CANCEL:
-      #  be.type = ButtonType.cancel
+      elif but == Buttons.CANCEL:
+        be.type = ButtonType.cancel
       else:
         be.type = ButtonType.unknown
       buttonEvents.append(be)
@@ -410,7 +410,7 @@ class CarInterface(CarInterfaceBase):
       # do disable on button down
       if b.type == ButtonType.cancel and b.pressed:
         events.add(EventName.buttonCancel)
-      if self.CC.longcontrol and not self.CC.scc_live:
+      if self.CC.longcontrol and not self.CC.scc_live: # self.CC.longcontrol=False, self.CC.scc_live=False
         # do enable on both accel and decel buttons
         if b.type in (ButtonType.accelCruise, ButtonType.decelCruise) and not b.pressed:
           events.add(EventName.buttonEnable)
@@ -418,10 +418,13 @@ class CarInterface(CarInterfaceBase):
           events.events.remove(EventName.wrongCarMode)
         if EventName.pcmDisable in events.events:
           events.events.remove(EventName.pcmDisable)
+        #events.add(EventName.buttonEnable)
       elif not self.CC.longcontrol and ret.cruiseState.enabled:
         # do enable on decel button only
         if b.type == ButtonType.decelCruise and not b.pressed:
           events.add(EventName.buttonEnable)
+      #if ret.cruiseState.enabled:
+      #  events.add(EventName.buttonEnable)
 
     ret.events = events.to_msg()
 

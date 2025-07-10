@@ -126,7 +126,7 @@ OpkrSpeedLimitOffsetOption:0
 CurvDecelOption:2
 AutoRESDelay:1
 UseRadarTrack:0
-RadarDisable:0
+RadarDisable:1
 DesiredCurvatureLimit:10
 LaneWidth:37
 SpdLaneWidthSpd:0,31

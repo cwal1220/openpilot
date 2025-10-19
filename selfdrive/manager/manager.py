@@ -4,6 +4,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 import traceback
 from typing import List, Tuple, Union
 
@@ -403,6 +404,8 @@ def main() -> None:
 
   # Start UI early so prepare can happen in the background
   if not prepare_only:
+    # Wait for GPU/SurfaceFlinger initialization to prevent intermittent startup failures
+    time.sleep(3)
     managed_processes['ui'].start()
 
   manager_prepare()

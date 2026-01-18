@@ -49,7 +49,14 @@ class CarInterface(CarInterfaceBase):
 
     ret.radarOffCan = ret.sccBus == -1
     ret.standStill = False
-    ret.openpilotLongitudinalControl = Params().get_bool("RadarDisable") or ret.sccBus == 2
+
+    # SCC 없는 차량 비전 기반 종방향 제어 (K7 HEV 등)
+    visionOnlyLong = True
+    if visionOnlyLong:
+      ret.sccBus = -1
+      ret.radarOffCan = True
+
+    ret.openpilotLongitudinalControl = Params().get_bool("RadarDisable") or ret.sccBus == 2 or visionOnlyLong
 
 
 

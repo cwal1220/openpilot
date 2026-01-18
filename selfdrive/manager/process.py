@@ -202,7 +202,12 @@ class NativeProcess(ManagerProcess):
       self.stop()
 
     if self.proc is not None:
-      return
+      # Check if process is actually alive, restart if dead
+      if not self.proc.is_alive():
+        cloudlog.warning(f"process {self.name} is dead, restarting")
+        self.proc = None
+      else:
+        return
 
     cwd = os.path.join(BASEDIR, self.cwd)
     cloudlog.info(f"starting process {self.name}")
@@ -234,7 +239,12 @@ class PythonProcess(ManagerProcess):
       self.stop()
 
     if self.proc is not None:
-      return
+      # Check if process is actually alive, restart if dead
+      if not self.proc.is_alive():
+        cloudlog.warning(f"process {self.name} is dead, restarting")
+        self.proc = None
+      else:
+        return
 
     cloudlog.info(f"starting python {self.module}")
     self.proc = Process(name=self.name, target=launcher, args=(self.module, self.name))

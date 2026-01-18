@@ -13,6 +13,7 @@ from selfdrive.car.hyundai.carstate import GearShifter
 from selfdrive.controls.lib.desire_helper import LANE_CHANGE_SPEED_MIN
 
 from selfdrive.car.hyundai.navicontrol  import NaviControl
+from selfdrive.car.hyundai.scc_smoother import SccSmoother
 
 from common.params import Params
 import common.log as trace1
@@ -120,6 +121,10 @@ class CarController():
     self.timer1 = tm.CTime1000("time")
 
     self.NC = NaviControl()
+
+    # 비전 기반 종방향 제어 (SCC 없는 차량용)
+    self.vision_only = True
+    self.scc_smoother = SccSmoother() if self.vision_only and not self.scc_live else None
 
     self.dRel = 0
     self.vRel = 0
@@ -560,6 +565,16 @@ class CarController():
     elif self.last_lead_distance != 0:
       self.last_lead_distance = 0
       self.standstill_res_button = False
+
+    # 비전 기반 종방향 제어 (SCC 없는 차량)
+    # TODO: 크루즈 상태 감지 완료 후 활성화
+    # if self.scc_smoother is not None and CS.cruise_active and not CS.out.brakePressed:
+    #   lead = self.sm['radarState'].leadOne
+    #   btn_signal = self.scc_smoother.get_button(lead, CS.out.vEgo, CS.VSetDis, enabled)
+    #   if btn_signal is not None:
+    #     can_sends.append(create_clu11(self.packer, frame, CS.clu11, btn_signal))
+    # elif self.scc_smoother is not None:
+    #   self.scc_smoother._reset()
     elif self.opkr_variablecruise and CS.acc_active:
       btn_signal = self.NC.update(CS, path_plan)
       self.on_speed_control = self.NC.onSpeedControl
@@ -1175,14 +1190,17 @@ class CarController():
       self.scc12cnt = CS.scc12init["CR_VSM_Alive"]
       self.scc11cnt = CS.scc11init["AliveCounterACC"]
 
-    str_log1 = 'MD={}  BS={:1.0f}/{:1.0f}  CV={:03.0f}/{:0.4f}  TQ={:03.0f}/{:03.0f}  VF={:03.0f}  ST={:03.0f}/{:01.0f}/{:01.0f}  FR={:03.0f}'.format(
-      CS.out.cruiseState.modeSel, CS.CP.mdpsBus, CS.CP.sccBus, self.model_speed, abs(self.sm['controlsState'].curvature), abs(new_steer), abs(CS.out.steeringTorque), v_future, self.p.STEER_MAX, self.p.STEER_DELTA_UP, self.p.STEER_DELTA_DOWN, self.timer1.sampleTime())
+    str_log1 = 'MD={}  VOL={}  BS={:1.0f}/{:1.0f}  CV={:03.0f}/{:0.4f}  TQ={:03.0f}/{:03.0f}  VF={:03.0f}  ST={:03.0f}/{:01.0f}/{:01.0f}'.format(
+      CS.out.cruiseState.modeSel, 'ON' if self.scc_smoother is not None else 'OF',
+      CS.CP.mdpsBus, CS.CP.sccBus, self.model_speed, abs(self.sm['controlsState'].curvature), abs(new_steer), abs(CS.out.steeringTorque), v_future, self.p.STEER_MAX, self.p.STEER_DELTA_UP, self.p.STEER_DELTA_DOWN)
     if CS.out.cruiseState.accActive:
-      str_log2 = 'AQ={:+04.2f}  VF={:03.0f}/{:03.0f}  TS={:03.0f}  SS/VS={:03.0f}/{:03.0f}  RD/LD={:04.1f}/{:03.1f}  CG={:1.0f}  FR={:03.0f}'.format(
-       self.aq_value if self.longcontrol else CS.scc12["aReqValue"], v_future, v_future_a, self.NC.ctrl_speed , setSpeed, round(CS.VSetDis), CS.lead_distance, self.last_lead_distance, CS.cruiseGapSet, self.timer1.sampleTime())
+      str_log2 = 'VOL={}  AQ={:+04.2f}  VF={:03.0f}/{:03.0f}  TS={:03.0f}  SS/VS={:03.0f}/{:03.0f}  RD/LD={:04.1f}/{:03.1f}  CG={:1.0f}'.format(
+       'ON' if self.scc_smoother is not None else 'OF',
+       self.aq_value if self.longcontrol else CS.scc12["aReqValue"], v_future, v_future_a, self.NC.ctrl_speed , setSpeed, round(CS.VSetDis), CS.lead_distance, self.last_lead_distance, CS.cruiseGapSet)
     else:
-      str_log2 = 'MDPS={}  LKAS={}  LEAD={}  AQ={:+04.2f}  VF={:03.0f}/{:03.0f}  CG={:1.0f}  FR={:03.0f}'.format(
-       CS.out.steerFaultTemporary, CS.lkas_button_on, 0 < CS.lead_distance < 149, self.aq_value if self.longcontrol else CS.scc12["aReqValue"], v_future, v_future_a, CS.cruiseGapSet, self.timer1.sampleTime())
+      str_log2 = 'VOL={}  MDPS={}  LKAS={}  LEAD={}  AQ={:+04.2f}  VF={:03.0f}/{:03.0f}  CG={:1.0f}'.format(
+       'ON' if self.scc_smoother is not None else 'OF',
+       CS.out.steerFaultTemporary, CS.lkas_button_on, 0 < CS.lead_distance < 149, self.aq_value if self.longcontrol else CS.scc12["aReqValue"], v_future, v_future_a, CS.cruiseGapSet)
     trace1.printf2( '{}'.format( str_log2 ) )
 
     # str_log3 = 'V/D/R/A/M/G={:.1f}/{:.1f}/{:.1f}/{:.2f}/{:.1f}/{:1.0f}'.format(CS.clu_Vanz, CS.lead_distance, CS.lead_objspd, CS.scc12["aReqValue"], self.stoppingdist, CS.cruiseGapSet)
@@ -1218,6 +1236,23 @@ class CarController():
           self.str_log2 = 'T={:0.2f}/{:0.2f}/{:0.2f}/{:0.3f}'.format(float(Decimal(self.params.get("TorqueKp", encoding="utf8"))*Decimal('0.1'))/max_lat_accel, \
            float(Decimal(self.params.get("TorqueKf", encoding="utf8"))*Decimal('0.1'))/max_lat_accel, float(Decimal(self.params.get("TorqueKi", encoding="utf8"))*Decimal('0.1'))/max_lat_accel, \
            float(Decimal(self.params.get("TorqueFriction", encoding="utf8")) * Decimal('0.001')))
+
+    # 비전 종방향 제어 로그 추가
+    if self.scc_smoother is not None:
+      if CS.cruise_active and not CS.out.brakePressed:
+        lead = self.sm['radarState'].leadOne
+        btn_str = 'ACC' if self.scc_smoother.last_button == Buttons.RES_ACCEL else \
+                  'DEC' if self.scc_smoother.last_button == Buttons.SET_DECEL else '---'
+        lead_dist = lead.dRel if lead.status else 0
+        self.str_log2 = 'CRU=ON  SET={:3.0f}  TGT={:3.0f}  DST={:4.1f}m  BTN={}'.format(
+          CS.VSetDis, self.scc_smoother.target_speed, lead_dist, btn_str)
+      else:
+        # 버튼 기반 크루즈 상태
+        self.str_log2 = 'C={}B={}S={:.0f}V={:.0f}'.format(
+          1 if CS.cruise_active else 0,
+          CS.cruise_buttons,
+          CS.VSetDis,
+          CS.out.vEgo * 3.6)
 
     trace1.printf1('{}  {}'.format(str_log1, self.str_log2))
 

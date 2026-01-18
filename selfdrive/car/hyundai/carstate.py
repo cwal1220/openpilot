@@ -196,11 +196,15 @@ class CarState(CarStateBase):
     self.mdps_error_cnt += 1 if cp_mdps.vl["MDPS12"]["CF_Mdps_ToiUnavail"] != 0 else -self.mdps_error_cnt
     ret.steerFaultTemporary = self.mdps_error_cnt > 100 #cp_mdps.vl["MDPS12"]["CF_Mdps_ToiUnavail"] != 0
 
-    self.VSetDis = cp_scc.vl["SCC11"]["VSetDis"]
-    ret.vSetDis = self.VSetDis
+    # SCC 없으면 버튼 기반으로 크루즈 속도 관리 (VSetDis는 크루즈 감지 로직에서 설정)
+    if self.no_radar:
+      # self.VSetDis는 크루즈 감지 로직에서 설정됨
+      self.lead_objspd = 0  # 레이더 없으므로 선행차 상대속도 없음
+    else:
+      self.VSetDis = cp_scc.vl["SCC11"]["VSetDis"]
+      lead_objspd = cp_scc.vl["SCC11"]["ACC_ObjRelSpd"]
+      self.lead_objspd = lead_objspd * CV.MS_TO_KPH
     self.clu_Vanz = cp.vl["CLU11"]["CF_Clu_Vanz"]
-    lead_objspd = cp_scc.vl["SCC11"]["ACC_ObjRelSpd"]
-    self.lead_objspd = lead_objspd * CV.MS_TO_KPH
     self.Mdps_ToiUnavail = cp_mdps.vl["MDPS12"]["CF_Mdps_ToiUnavail"]
     self.driverOverride = cp.vl["TCS13"]["DriverOverride"]
     if self.driverOverride == 1:
@@ -217,7 +221,19 @@ class CarState(CarStateBase):
     self.is_set_speed_in_mph = bool(cp.vl["CLU11"]["CF_Clu_SPEED_UNIT"])
     ret.isMph = self.is_set_speed_in_mph
     
-    self.acc_active = (cp_scc.vl["SCC12"]['ACCMode'] != 0)
+    # SCC 없는 차량 (비전 기반 종방향 제어)
+    if self.no_radar:
+      # 버튼 이벤트 기반 크루즈 감지 (K7 HEV 등)
+      # SET(2) 버튼: 크루즈 활성화, CANCEL(4) 또는 브레이크: 크루즈 해제
+      clu_cruise_btn = cp.vl["CLU11"]["CF_Clu_CruiseSwState"]
+      if clu_cruise_btn == 2 and self.prev_cruise_buttons != 2:  # SET 버튼 눌림
+        self.acc_active = True
+        self.VSetDis = max(30, int(ret.vEgo * 3.6))  # 현재 속도를 설정 속도로
+      elif clu_cruise_btn == 4 or ret.brakePressed:  # CANCEL 또는 브레이크
+        self.acc_active = False
+        self.VSetDis = 0
+    else:
+      self.acc_active = (cp_scc.vl["SCC12"]['ACCMode'] != 0)
     self.cruise_active = self.acc_active
     if self.cruise_active:
       self.brake_check = False
@@ -228,11 +244,15 @@ class CarState(CarStateBase):
     ret.cruiseState.cruiseSwState = self.cruise_buttons
     ret.cruiseState.modeSel = self.cruise_set_mode
 
+    # VSetDis를 ret에 반영 (크루즈 감지 로직 이후에 설정)
+    ret.vSetDis = self.VSetDis
+
     set_speed = self.cruise_speed_button()
     if ret.cruiseState.enabled and (self.brake_check == False or self.cancel_check == False):
       speed_conv = CV.MPH_TO_MS if self.is_set_speed_in_mph else CV.KPH_TO_MS
+      # no_radar일 때는 VSetDis 사용 (LVR12가 없으므로)
       ret.cruiseState.speed = set_speed * speed_conv if not self.no_radar else \
-                                         cp.vl["LVR12"]["CF_Lvr_CruiseSet"] * speed_conv
+                                         self.VSetDis * speed_conv
     else:
       ret.cruiseState.speed = 0
 

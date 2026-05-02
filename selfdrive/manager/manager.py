@@ -400,15 +400,13 @@ def main() -> None:
   prepare_only = os.getenv("PREPAREONLY") is not None
 
   manager_init()
-
-  # Start UI early so prepare can happen in the background
-  if not prepare_only:
-    managed_processes['ui'].start()
-
+  
   manager_prepare()
 
   if prepare_only:
     return
+  
+  managed_processes['ui'].start()
 
   # SystemExit on sigterm
   signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(1))

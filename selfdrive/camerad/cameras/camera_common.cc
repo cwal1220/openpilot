@@ -195,8 +195,8 @@ bool CameraBuf::acquire() {
   };
   cur_rgb_buf->set_frame_id(cur_frame_data.frame_id);
   cur_yuv_buf->set_frame_id(cur_frame_data.frame_id);
-  vipc_server->send(cur_rgb_buf, &extra);
   vipc_server->send(cur_yuv_buf, &extra);
+  vipc_server->send(cur_rgb_buf, &extra);
 
   return true;
 }

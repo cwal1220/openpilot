@@ -81,6 +81,7 @@ USE_WEBCAM = os.getenv("USE_WEBCAM") is not None
 
 lenv = {
   "PATH": os.environ['PATH'],
+  "HOME": os.environ.get("HOME", ""),
   "LD_LIBRARY_PATH": [Dir(f"#third_party/acados/{acados_arch}/lib").abspath],
   "PYTHONPATH": Dir("#").abspath + ":" + Dir("#pyextra/").abspath,
 
@@ -272,9 +273,9 @@ env = Environment(
   tools=["default", "cython", "compilation_db"],
 )
 
-cythonize_bin = shutil.which("cythonize") or shutil.which("cythonize3")
-if cythonize_bin is not None:
-  env["CYTHON"] = cythonize_bin
+cython_bin = shutil.which("cython") or shutil.which("cython3")
+if cython_bin is not None:
+  env["CYTHON"] = cython_bin
   env["CYTHONFLAGS"] = ["--cplus"]
 
 if arch == "Darwin":
@@ -314,8 +315,8 @@ py_include = sysconfig.get_paths()['include']
 envCython = env.Clone()
 envCython["CPPPATH"] += [py_include, np.get_include()]
 envCython["CCFLAGS"] += ["-Wno-#warnings", "-Wno-shadow", "-Wno-deprecated-declarations"]
-if cythonize_bin is not None:
-  envCython["CYTHON"] = cythonize_bin
+if cython_bin is not None:
+  envCython["CYTHON"] = cython_bin
   envCython["CYTHONFLAGS"] = ["--cplus"]
 envCython["LIBS"] = []
 if arch == "Darwin":

@@ -44,11 +44,13 @@ Python 패키지:
 - `sentry-sdk`
 - `pycapnp`
 - `Cython==0.29.37`
+- `future-fstrings`
 - `onnx`
 - `onnxruntime`
 - `pyzmq`
 - `libusb1`
 - `pyserial`
+- `pycryptodome`
 - `setproctitle`
 - `tqdm`
 - `crcmod`
@@ -66,15 +68,34 @@ Python 패키지:
 
 ```bash
 clinfo | sed -n '1,40p'
-python3 -c 'import capnp, zmq, usb1, serial, sentry_sdk, tqdm, crcmod, cffi, onnx'
+python3 -c 'import capnp, zmq, usb1, serial, sentry_sdk, tqdm, crcmod, cffi, onnx, future_fstrings'
 ```
 
-카메라/모델 기본 빌드 확인:
+Manager 벤치 실행에 필요한 기본 산출물 빌드 확인:
 
 ```bash
 cd ~/openpilot
 OPENPILOT_BUILD_PLATFORM=linux_generic USE_WEBCAM=1 NOSENSOR=1 \
-  scons -j$(nproc) selfdrive/camerad/camerad selfdrive/modeld/_modeld
+  scons -j$(nproc) \
+    selfdrive/camerad/camerad \
+    selfdrive/modeld/_modeld \
+    selfdrive/ui/_ui \
+    selfdrive/clocksd/clocksd \
+    selfdrive/proclogd/proclogd \
+    selfdrive/locationd/locationd \
+    common/clock.so \
+    common/params_pyx.so \
+    common/kalman/simple_kalman_impl.so \
+    common/transformations/transformations.so \
+    cereal/messaging/messaging_pyx.so \
+    cereal/visionipc/visionipc_pyx.so \
+    opendbc/can/parser_pyx.so \
+    opendbc/can/packer_pyx.so \
+    rednose/helpers/ekf_sym_pyx.so \
+    selfdrive/boardd/boardd_api_impl.so \
+    selfdrive/controls/lib/lateral_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so \
+    selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so \
+    selfdrive/controls/lib/cluster/libfastcluster.so
 ```
 
 Panda/boardd 기본 빌드 확인:
@@ -88,8 +109,8 @@ OPENPILOT_BUILD_PLATFORM=linux_generic \
 ## 4. 현재까지 확인된 추가 이슈
 
 - `selfdrive/hardware/__init__.py`는 generic Linux ARM64가 Android 의존성을 미리 import하지 않도록 지연 import로 보정했다.
-- `selfdrive/controls/lib/*_mpc_lib`의 `acados` 생성 산출물은 처음 한 번 별도 빌드가 필요할 수 있다.
-- `selfdrive/modeld/runners/onnx_runner.py`는 실행권한이 필요하므로 bootstrap 스크립트에서 `chmod +x`를 같이 수행한다.
+- `selfdrive/controls/lib/*_mpc_lib`의 `acados` 생성 산출물은 처음 한 번 빌드해야 하므로 위 manager runtime 빌드 명령에 포함했다.
+- `selfdrive/modeld/runners/onnx_runner.py`는 `execvp()`로 실행될 수 있으므로 파일 자체를 executable로 추적한다.
 - 현재 Orange Pi 5 + UVC webcam 조합에서는 `ROADCAM_FOURCC=MJPG`가 가장 안정적으로 확인됐다.
 - Panda는 USB로만 연결해도 `plugdev` udev rule이 없으면 `lsusb`에는 보여도 `Panda.list()`가 빈 배열로 나올 수 있다.
 - Panda가 bootstub 상태인 경우에는 `panda/board/obj/panda*.bin.signed` 산출물이 있어야 자동 복구가 가능하다.

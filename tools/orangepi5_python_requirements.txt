@@ -1,6 +1,7 @@
 sentry-sdk
 pycapnp
 Cython==0.29.37
+future-fstrings
 onnx
 onnxruntime
 pyzmq

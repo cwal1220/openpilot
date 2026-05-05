@@ -26,7 +26,7 @@ class ModelFrame {
 public:
   ModelFrame(cl_device_id device_id, cl_context context);
   ~ModelFrame();
-  float* prepare(cl_mem yuv_cl, int width, int height, const mat3& transform, cl_mem *output);
+  float* prepare(cl_mem yuv_cl, int width, int height, const mat3& transform, cl_mem *output, bool nhwc_output = false);
   void finish();
 
   const int MODEL_WIDTH = 512;
@@ -38,6 +38,9 @@ private:
   Transform transform;
   LoadYUVState loadyuv;
   cl_command_queue q;
-  cl_mem y_cl, u_cl, v_cl, net_input_cl;
+  cl_mem y_cl, u_cl, v_cl, net_input_cl, net_input_nhwc_cl;
   std::unique_ptr<float[]> input_frames;
+  std::unique_ptr<float[]> input_frames_nhwc;
+  std::unique_ptr<float[]> current_frame_nhwc;
+  std::unique_ptr<float[]> prev_frame_nhwc;
 };

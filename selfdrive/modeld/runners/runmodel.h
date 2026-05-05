@@ -10,5 +10,5 @@ public:
   virtual void execute() {}
   virtual void* getInputBuf() { return nullptr; }
   virtual void* getExtraBuf() { return nullptr; }
+  virtual bool needsNHWCInput() const { return false; }
 };
-

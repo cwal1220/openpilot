@@ -1,7 +1,7 @@
 #!/bin/sh
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
-cd $DIR
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" >/dev/null && pwd)"
+cd "$DIR"
 
 if [ -d /system ]; then
   if [ -f /TICI ]; then # QCOM2
@@ -10,7 +10,13 @@ if [ -d /system ]; then
     export LD_LIBRARY_PATH="/data/pythonpath/third_party/snpe/aarch64/:$LD_LIBRARY_PATH"
   fi
 else
-  # PC
-  export LD_LIBRARY_PATH="$DIR/../../third_party/snpe/x86_64-linux-clang:$DIR/../../openpilot/third_party/snpe/x86_64:$LD_LIBRARY_PATH"
+  case "$(uname -m)" in
+    x86_64)
+      export LD_LIBRARY_PATH="$DIR/../../third_party/snpe/x86_64-linux-clang:$DIR/../../openpilot/third_party/snpe/x86_64:$LD_LIBRARY_PATH"
+      ;;
+    *)
+      # Generic Linux ARM64 uses the ONNX path and doesn't need Qualcomm SNPE libraries.
+      ;;
+  esac
 fi
 exec ./_modeld

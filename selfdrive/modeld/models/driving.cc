@@ -30,14 +30,19 @@ void model_init(ModelState* s, cl_device_id device_id, cl_context context) {
   s->frame = new ModelFrame(device_id, context);
   s->wide_frame = new ModelFrame(device_id, context);
 
-#ifdef USE_THNEED
+#ifdef USE_RKNN_MODEL
+  s->m = std::make_unique<RKNNModel>("models/supercombo.rknn",
+                                     &s->output[0], NET_OUTPUT_SIZE, USE_GPU_RUNTIME, true);
+#elif defined(USE_THNEED)
   s->m = std::make_unique<ThneedModel>("models/supercombo.thneed",
-#elif USE_ONNX_MODEL
+                                       &s->output[0], NET_OUTPUT_SIZE, USE_GPU_RUNTIME, true);
+#elif defined(USE_ONNX_MODEL)
   s->m = std::make_unique<ONNXModel>("models/supercombo.onnx",
+                                     &s->output[0], NET_OUTPUT_SIZE, USE_GPU_RUNTIME, true);
 #else
   s->m = std::make_unique<SNPEModel>("models/supercombo.dlc",
+                                     &s->output[0], NET_OUTPUT_SIZE, USE_GPU_RUNTIME, true);
 #endif
-   &s->output[0], NET_OUTPUT_SIZE, USE_GPU_RUNTIME, true);
 
 #ifdef TEMPORAL
   s->m->addRecurrent(&s->output[OUTPUT_SIZE], TEMPORAL_SIZE);
@@ -72,17 +77,20 @@ ModelOutput* model_eval_frame(ModelState* s, VisionBuf* buf, VisionBuf* wbuf,
 #endif
 
   // if getInputBuf is not NULL, net_input_buf will be
+  const bool nhwc_input = s->m->needsNHWCInput();
   auto input_buf = static_cast<cl_mem*>(s->m->getInputBuf());
-  auto net_input_buf = s->frame->prepare(buf->buf_cl, buf->width, buf->height, transform, input_buf);
+  auto net_input_buf = s->frame->prepare(buf->buf_cl, buf->width, buf->height, transform, input_buf, nhwc_input);
   s->m->addImage(net_input_buf, s->frame->buf_size);
 
+  cl_mem *extra_buf = nullptr;
   if (wbuf != nullptr) {
-    auto net_extra_buf = s->wide_frame->prepare(wbuf->buf_cl, wbuf->width, wbuf->height, transform_wide, static_cast<cl_mem*>(s->m->getExtraBuf()));
+    extra_buf = static_cast<cl_mem*>(s->m->getExtraBuf());
+    auto net_extra_buf = s->wide_frame->prepare(wbuf->buf_cl, wbuf->width, wbuf->height, transform_wide, extra_buf, nhwc_input);
     s->m->addExtra(net_extra_buf, s->wide_frame->buf_size);
   }
   if (input_buf != nullptr) {
     s->frame->finish();
-    if (wbuf != nullptr) {
+    if (extra_buf != nullptr) {
       s->wide_frame->finish();
     }
   }

@@ -1,6 +1,6 @@
 import os
 
-Import('env', 'arch', 'cereal', 'messaging', 'common', 'gpucommon', 'visionipc')
+Import('env', 'arch', 'build_platform', 'cereal', 'messaging', 'common', 'gpucommon', 'visionipc')
 lenv = env.Clone()
 
 libs = [cereal, messaging, common, visionipc, gpucommon,
@@ -31,9 +31,9 @@ thneed_src = [
 
 use_thneed = not GetOption('no_thneed')
 
-if arch == "aarch64" or arch == "larch64":
+if build_platform in ("android_qcom", "linux_qcom"):
   libs += ['gsl', 'CB']
-  libs += ['gnustl_shared'] if arch == "aarch64" else ['pthread', 'dl']
+  libs += ['gnustl_shared'] if build_platform == "android_qcom" else ['pthread', 'dl']
 
   if use_thneed:
     common_src += thneed_src
@@ -44,27 +44,31 @@ else:
   libs += ['pthread']
 
   if not GetOption('snpe'):
-    # for onnx support
-    common_src += ['runners/onnxmodel.cc']
+    del libs[libs.index('SNPE')]
+    del libs[libs.index('symphony-cpu')]
+    common_src.remove('runners/snpemodel.cc')
 
-    # tell runners to use onnx
+    # for generic Linux model runners
+    common_src += ['runners/onnxmodel.cc', 'runners/rknnmodel.cc', 'runners/rknn_runtime.c']
+
+    # keep ONNX available for dmonitoring on generic linux
     lenv['CFLAGS'].append("-DUSE_ONNX_MODEL")
     lenv['CXXFLAGS'].append("-DUSE_ONNX_MODEL")
+
+    if arch == "aarch64" and os.path.exists(File("models/supercombo.rknn").abspath):
+      libs += ['rknnrt', 'dl']
+      lenv['CFLAGS'].append("-DUSE_RKNN_MODEL")
+      lenv['CXXFLAGS'].append("-DUSE_RKNN_MODEL")
 
   if arch == "Darwin":
     # fix OpenCL
     del libs[libs.index('OpenCL')]
     lenv['FRAMEWORKS'] = ['OpenCL']
 
-    # no SNPE on Mac
-    del libs[libs.index('SNPE')]
-    del libs[libs.index('symphony-cpu')]
-    del common_src[common_src.index('runners/snpemodel.cc')]
-
 common_model = lenv.Object(common_src)
 
 # build thneed model
-if use_thneed and arch in ("aarch64", "larch64"):
+if use_thneed and build_platform in ("android_qcom", "linux_qcom"):
   fn = File("models/supercombo").abspath
   compiler = lenv.Program('thneed/compile', ["thneed/compile.cc"]+common_model, LIBS=libs)
   cmd = f"cd {Dir('.').abspath} && {compiler[0].abspath} {fn}.dlc {fn}_badweights.thneed --binary"

@@ -1,13 +1,13 @@
 import os
 Import('qt_env', 'arch', 'common', 'messaging', 'gpucommon', 'visionipc',
-       'cereal', 'transformations')
+       'cereal', 'transformations', 'build_platform')
 
 base_libs = [gpucommon, common, messaging, cereal, visionipc, transformations, 'zmq',
              'capnp', 'kj', 'm', 'OpenCL', 'ssl', 'crypto', 'pthread'] + qt_env["LIBS"]
 
 maps = arch in ['larch64', 'x86_64']
 
-if arch == 'aarch64':
+if build_platform == 'android_qcom':
   base_libs += ['log', 'utils', 'gui', 'ui', 'CB', 'gsl', 'adreno_utils', 'cutils', 'uuid']
 
 if maps and arch == 'x86_64':
@@ -26,11 +26,11 @@ widgets_src = ["ui.cc", "qt/widgets/input.cc", "qt/widgets/drive_stats.cc",
                "qt/request_repeater.cc", "qt/qt_window.cc", "qt/widgets/opkr.cc"]
 widgets_src += ["qt/widgets/steerWidget.cc", "qt/widgets/groupWidget.cc" ]
 
-if arch != 'aarch64':
+if build_platform != 'android_qcom':
   widgets_src += ["qt/offroad/networking.cc", "qt/offroad/wifiManager.cc"]
 
 qt_env['CPPDEFINES'] = []
-if arch == 'aarch64':
+if build_platform == 'android_qcom':
   base_libs += ['qmapboxgl']
   widgets_src += ["qt/maps/map_helpers.cc", "qt/maps/map_settings.cc", "qt/maps/map.cc"]
   qt_env['CPPDEFINES'] += ["ENABLE_MAPS"]
@@ -73,7 +73,7 @@ qt_env.Program("_ui", qt_src + [asset_obj], LIBS=qt_libs)
 
 
 # setup and factory resetter
-if arch != 'aarch64' and GetOption('extras'):
+if build_platform != 'android_qcom' and GetOption('extras'):
   qt_env.Program("qt/setup/reset", ["qt/setup/reset.cc"], LIBS=qt_libs)
   qt_env.Program("qt/setup/setup", ["qt/setup/setup.cc", asset_obj],
                  LIBS=qt_libs + ['curl', 'common', 'json11'])

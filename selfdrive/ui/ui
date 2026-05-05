@@ -1,8 +1,10 @@
 #!/bin/sh
 cd "$(dirname "$0")"
 export LD_LIBRARY_PATH="/system/lib64:$LD_LIBRARY_PATH"
-if [ ! -f /TICI ]; then
+if [ -d /system ] && [ ! -f /TICI ]; then
   export LD_LIBRARY_PATH="/data/openpilot/third_party/mapbox-gl-native-qt/aarch64:$LD_LIBRARY_PATH"
 fi
-export QT_PLUGIN_PATH="../../third_party/qt-plugins/$(uname -m)"
+if [ -d "../../third_party/qt-plugins/$(uname -m)" ]; then
+  export QT_PLUGIN_PATH="../../third_party/qt-plugins/$(uname -m)"
+fi
 exec ./_ui

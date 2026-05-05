@@ -13,6 +13,7 @@ import psutil
 
 import cereal.messaging as messaging
 from cereal import log
+from common.basedir import BASEDIR, PERSIST
 from common.dict_helpers import strip_deprecated_keys
 from common.filter_simple import FirstOrderFilter
 
@@ -21,7 +22,7 @@ from common.numpy_fast import interp
 from common.params import Params
 from common.realtime import DT_TRML, sec_since_boot
 from selfdrive.controls.lib.alertmanager import set_offroad_alert
-from selfdrive.hardware import EON, TICI, PC, HARDWARE
+from selfdrive.hardware import EON, TICI, PC, GENERIC_LINUX, HARDWARE
 from selfdrive.loggerd.config import get_available_percent
 from selfdrive.swaglog import cloudlog
 from selfdrive.thermald.power_monitoring import PowerMonitoring
@@ -54,10 +55,11 @@ OFFROAD_DANGER_TEMP = 79.5 if TICI else 70.0
 
 prev_offroad_states: Dict[str, Tuple[bool, Optional[str]]] = {}
 
-mediaplayer = '/data/openpilot/selfdrive/assets/addon/mediaplayer/'
-prebuiltfile = '/data/openpilot/prebuilt'
-sshkeyfile = '/data/public_key'
-pandaflash_ongoing = '/data/openpilot/pandaflash_ongoing'
+mediaplayer = os.path.join(BASEDIR, 'selfdrive', 'assets', 'addon', 'mediaplayer')
+mediaplayer_bin = os.path.join(mediaplayer, 'mediaplayer')
+prebuiltfile = os.path.join(BASEDIR, 'prebuilt')
+sshkeyfile = os.path.join(PERSIST, 'comma', 'id_rsa.pub')
+pandaflash_ongoing = os.path.join(BASEDIR, 'pandaflash_ongoing')
 
 tz_by_type: Optional[Dict[str, int]] = None
 def populate_tz_by_type():
@@ -130,7 +132,13 @@ def hw_state_thread(end_event, hw_queue):
           if (modem_version is not None) and (modem_nv is not None):
             cloudlog.event("modem version", version=modem_version, nv=modem_nv)
 
-        network_strength_, connect_name_, rsrp_ = HARDWARE.get_network_strength(network_type)
+        network_strength = HARDWARE.get_network_strength(network_type)
+        if isinstance(network_strength, tuple):
+          network_strength_, connect_name_, rsrp_ = network_strength
+        else:
+          network_strength_ = network_strength
+          connect_name_ = "---"
+          rsrp_ = "--"
         hw_state = HardwareState(
           network_type=network_type,
           network_metered=HARDWARE.get_network_metered(network_type),
@@ -247,6 +255,7 @@ def thermald_thread(end_event, hw_queue):
 
   while not end_event.is_set():
     sm.update(PANDA_STATES_TIMEOUT)
+    force_ignition_override = (PC or GENERIC_LINUX) and (os.getenv("FORCE_IGNITION_ON") is not None)
 
     pandaStates = sm['pandaStates']
     peripheralState = sm['peripheralState']
@@ -275,7 +284,7 @@ def thermald_thread(end_event, hw_queue):
         is_uno = peripheralState.pandaType == log.PandaState.PandaType.uno
         if TICI:
           fan_controller = TiciFanController()
-        elif is_uno or PC:
+        elif is_uno or PC or GENERIC_LINUX:
           fan_controller = UnoFanController()
         else:
           fan_controller = EonFanController()
@@ -290,9 +299,13 @@ def thermald_thread(end_event, hw_queue):
       fan_controller = None
     elif not is_openpilot_view_enabled:
       if sec_since_boot() - ts > DISCONNECT_TIMEOUT:
-        if onroad_conditions["ignition"]:
+        if onroad_conditions["ignition"] and not force_ignition_override:
           cloudlog.error("Lost panda connection while onroad")
         onroad_conditions["ignition"] = False
+
+    # Test-only ignition override for generic Linux bench bring-up.
+    if force_ignition_override:
+      onroad_conditions["ignition"] = True
 
     try:
       last_hw_state = hw_queue.get_nowait()
@@ -471,11 +484,11 @@ def thermald_thread(end_event, hw_queue):
       if off_ts is None:
         off_ts = sec_since_boot()
 
-      if shutdown_trigger == 1 and sound_trigger == 1 and msg.deviceState.batteryStatus == "Discharging" and started_seen and (sec_since_boot() - off_ts) > 1 and getoff_alert == 1:
-        subprocess.Popen([mediaplayer + 'mediaplayer', '/data/openpilot/selfdrive/assets/addon/sound/eondetach_ko.wav'], shell = False, stdin=None, stdout=None, stderr=None, env = env, close_fds=True)
+      if not GENERIC_LINUX and shutdown_trigger == 1 and sound_trigger == 1 and msg.deviceState.batteryStatus == "Discharging" and started_seen and (sec_since_boot() - off_ts) > 1 and getoff_alert == 1:
+        subprocess.Popen([mediaplayer_bin, os.path.join(BASEDIR, 'selfdrive', 'assets', 'addon', 'sound', 'eondetach_ko.wav')], shell = False, stdin=None, stdout=None, stderr=None, env = env, close_fds=True)
         sound_trigger = 0
-      elif shutdown_trigger == 1 and sound_trigger == 1 and msg.deviceState.batteryStatus == "Discharging" and started_seen and (sec_since_boot() - off_ts) > 1 and getoff_alert == 2:
-        subprocess.Popen([mediaplayer + 'mediaplayer', '/data/openpilot/selfdrive/assets/addon/sound/eondetach_en.wav'], shell = False, stdin=None, stdout=None, stderr=None, env = env, close_fds=True)
+      elif not GENERIC_LINUX and shutdown_trigger == 1 and sound_trigger == 1 and msg.deviceState.batteryStatus == "Discharging" and started_seen and (sec_since_boot() - off_ts) > 1 and getoff_alert == 2:
+        subprocess.Popen([mediaplayer_bin, os.path.join(BASEDIR, 'selfdrive', 'assets', 'addon', 'sound', 'eondetach_en.wav')], shell = False, stdin=None, stdout=None, stderr=None, env = env, close_fds=True)
         sound_trigger = 0
       # shutdown if the battery gets lower than 3%, it's discharging, we aren't running for
       # more than a minute but we were running
@@ -493,43 +506,44 @@ def thermald_thread(end_event, hw_queue):
         elif msg.deviceState.batteryPercent < 10 and not started_seen and msg.deviceState.batteryStatus == "Discharging":
           HARDWARE.shutdown()
 
-    # opkr
-    prebuiltlet = params.get_bool("PutPrebuiltOn")
-    if not os.path.isdir("/data/openpilot"):
-      if is_openpilot_dir:
-        os.system("cd /data/params/d; rm -f DongleId") # Delete DongleID if the Openpilot directory disappears, Seems you want to switch fork/branch.
-      is_openpilot_dir = False
-    elif not os.path.isfile(prebuiltfile) and prebuiltlet and is_openpilot_dir:
-      os.system("cd /data/openpilot; touch prebuilt")
-    elif os.path.isfile(prebuiltfile) and not prebuiltlet:
-      os.system("cd /data/openpilot; rm -f prebuilt")
+    if not (PC or GENERIC_LINUX):
+      # opkr
+      prebuiltlet = params.get_bool("PutPrebuiltOn")
+      if not os.path.isdir("/data/openpilot"):
+        if is_openpilot_dir:
+          os.system("cd /data/params/d; rm -f DongleId") # Delete DongleID if the Openpilot directory disappears, Seems you want to switch fork/branch.
+        is_openpilot_dir = False
+      elif not os.path.isfile(prebuiltfile) and prebuiltlet and is_openpilot_dir:
+        os.system("cd /data/openpilot; touch prebuilt")
+      elif os.path.isfile(prebuiltfile) and not prebuiltlet:
+        os.system("cd /data/openpilot; rm -f prebuilt")
 
-    # opkr
-    sshkeylet = params.get_bool("OpkrSSHLegacy")
-    if not os.path.isfile(sshkeyfile) and sshkeylet:
-      os.system("cp -f /data/openpilot/selfdrive/assets/addon/key/GithubSshKeys_legacy /data/params/d/GithubSshKeys; chmod 600 /data/params/d/GithubSshKeys; touch /data/public_key")
-    elif os.path.isfile(sshkeyfile) and not sshkeylet:
-      os.system("cp -f /data/openpilot/selfdrive/assets/addon/key/GithubSshKeys_new /data/params/d/GithubSshKeys; chmod 600 /data/params/d/GithubSshKeys; rm -f /data/public_key")
+      # opkr
+      sshkeylet = params.get_bool("OpkrSSHLegacy")
+      if not os.path.isfile(sshkeyfile) and sshkeylet:
+        os.system("cp -f /data/openpilot/selfdrive/assets/addon/key/GithubSshKeys_legacy /data/params/d/GithubSshKeys; chmod 600 /data/params/d/GithubSshKeys; touch /data/public_key")
+      elif os.path.isfile(sshkeyfile) and not sshkeylet:
+        os.system("cp -f /data/openpilot/selfdrive/assets/addon/key/GithubSshKeys_new /data/params/d/GithubSshKeys; chmod 600 /data/params/d/GithubSshKeys; rm -f /data/public_key")
 
-    # opkr hotspot
-    if hotspot_on_boot and not hotspot_run and sec_since_boot() > 80:
-      os.system("service call wifi 37 i32 0 i32 1 &")
-      hotspot_run = True
+      # opkr hotspot
+      if hotspot_on_boot and not hotspot_run and sec_since_boot() > 80:
+        os.system("service call wifi 37 i32 0 i32 1 &")
+        hotspot_run = True
 
-    opkrwakeup = params.get_bool("OpkrWakeUp")
-    if opkrwakeup and not wakeuprunning:
-      cmd1 = '/data/openpilot/selfdrive/assets/addon/sound/wakeup.wav'
-      wakeuprunning = True
-      wakeupstarted = sec_since_boot()
-      subprocess.Popen([mediaplayer + 'mediaplayer', cmd1], shell = False, stdin=None, stdout=None, stderr=None, env = env, close_fds=True)
-    elif wakeuprunning:
-      if not opkrwakeup:
-        wakeuprunning = False
-        os.system("pkill -f mediaplayer")
-      elif sec_since_boot() - wakeupstarted > 40:
-        wakeuprunning = False
-        Params().put_bool("OpkrWakeUp", False)
-        os.system("pkill -f mediaplayer")
+      opkrwakeup = params.get_bool("OpkrWakeUp")
+      if opkrwakeup and not wakeuprunning:
+        cmd1 = '/data/openpilot/selfdrive/assets/addon/sound/wakeup.wav'
+        wakeuprunning = True
+        wakeupstarted = sec_since_boot()
+        subprocess.Popen([mediaplayer_bin, cmd1], shell = False, stdin=None, stdout=None, stderr=None, env = env, close_fds=True)
+      elif wakeuprunning:
+        if not opkrwakeup:
+          wakeuprunning = False
+          os.system("pkill -f mediaplayer")
+        elif sec_since_boot() - wakeupstarted > 40:
+          wakeuprunning = False
+          Params().put_bool("OpkrWakeUp", False)
+          os.system("pkill -f mediaplayer")
 
     # Offroad power monitoring
     power_monitor.calculate(peripheralState, onroad_conditions["ignition"])

@@ -289,8 +289,22 @@ static void update_state(UIState *s) {
   }
   if (sm.updated("deviceState")) {
     scene.deviceState = sm["deviceState"].getDeviceState();
-    scene.cpuPerc = (scene.deviceState.getCpuUsagePercent()[0] + scene.deviceState.getCpuUsagePercent()[1] + scene.deviceState.getCpuUsagePercent()[2] + scene.deviceState.getCpuUsagePercent()[3])/4;
-    scene.cpuTemp = (scene.deviceState.getCpuTempC()[0] + scene.deviceState.getCpuTempC()[1] + scene.deviceState.getCpuTempC()[2] + scene.deviceState.getCpuTempC()[3])/4;
+    auto cpu_usage = scene.deviceState.getCpuUsagePercent();
+    if (cpu_usage.size() > 0) {
+      int usage_sum = 0;
+      for (const auto usage : cpu_usage) {
+        usage_sum += usage;
+      }
+      scene.cpuPerc = usage_sum / cpu_usage.size();
+    }
+    auto cpu_temp = scene.deviceState.getCpuTempC();
+    if (cpu_temp.size() > 0) {
+      float temp_sum = 0.0f;
+      for (const auto temp : cpu_temp) {
+        temp_sum += temp;
+      }
+      scene.cpuTemp = temp_sum / cpu_temp.size();
+    }
     scene.batTemp = scene.deviceState.getBatteryTempC();
     scene.ambientTemp = scene.deviceState.getAmbientTempC();
     scene.fanSpeed = scene.deviceState.getFanSpeedPercentDesired();
@@ -302,7 +316,7 @@ static void update_state(UIState *s) {
       scene.pandaType = pandaStates[0].getPandaType();
 
       if (scene.pandaType != cereal::PandaState::PandaType::UNKNOWN) {
-        scene.ignition = false;
+        scene.ignition = util::getenv("FORCE_IGNITION_ON", 0) == 1;
         for (const auto& pandaState : pandaStates) {
           scene.ignition |= pandaState.getIgnitionLine() || pandaState.getIgnitionCan();
           scene.controlAllowed = pandaState.getControlsAllowed();
@@ -311,6 +325,9 @@ static void update_state(UIState *s) {
     }
   } else if ((s->sm->frame - s->sm->rcv_frame("pandaStates")) > 5*UI_FREQ) {
     scene.pandaType = cereal::PandaState::PandaType::UNKNOWN;
+  }
+  if (util::getenv("FORCE_IGNITION_ON", 0) == 1) {
+    scene.ignition = true;
   }
   if (sm.updated("ubloxGnss")) {
     auto ub_data = sm["ubloxGnss"].getUbloxGnss();
@@ -533,7 +550,7 @@ static void update_status(UIState *s) {
   Params params;
 
   //opkr navi on boot
-  if (!s->scene.navi_on_boot && (s->sm->frame - s->scene.started_frame > 5*UI_FREQ)) {
+  if (!Hardware::PC() && !s->scene.navi_on_boot && (s->sm->frame - s->scene.started_frame > 5*UI_FREQ)) {
     if (params.getBool("OpkrRunNaviOnBoot") && params.getBool("ControlsReady") && (params.get("CarParams").size() > 0)) {
       s->scene.navi_on_boot = true;
       s->scene.map_is_running = true;
@@ -551,7 +568,7 @@ static void update_status(UIState *s) {
       s->scene.navi_on_boot = true;
     }
   }
-  if (!s->scene.move_to_background && (s->sm->frame - s->scene.started_frame > 20*UI_FREQ)) {
+  if (!Hardware::PC() && !s->scene.move_to_background && (s->sm->frame - s->scene.started_frame > 20*UI_FREQ)) {
     if (params.getBool("OpkrRunNaviOnBoot") && params.getBool("OpkrMapEnable") && params.getBool("ControlsReady") && (params.get("CarParams").size() > 0)) {
       s->scene.move_to_background = true;
       s->scene.map_on_top = false;
@@ -563,7 +580,7 @@ static void update_status(UIState *s) {
   }
 
   // waze refresh after alert to keep going alerts, this is an workaround till to find out better solution.
-  if (s->scene.navi_select == 3) {
+  if (!Hardware::PC() && s->scene.navi_select == 3) {
     if (s->scene.map_is_running && s->scene.map_on_overlay && s->scene.liveNaviData.wazealertdistance >= 200) {
       s->scene.waze_stop_frame = s->sm->frame;
       s->scene.waze_stop = true;
@@ -590,7 +607,7 @@ static void update_status(UIState *s) {
   }
 
   // this is useful to save compiling time before depart when you use remote ignition
-  if (!s->scene.auto_gitpull && (s->sm->frame - s->scene.started_frame > 15*UI_FREQ)) {
+  if (!Hardware::PC() && !s->scene.auto_gitpull && (s->sm->frame - s->scene.started_frame > 15*UI_FREQ)) {
     if (params.getBool("GitPullOnBoot")) {
       s->scene.auto_gitpull = true;
       system("/data/openpilot/selfdrive/assets/addon/script/gitpull.sh &");

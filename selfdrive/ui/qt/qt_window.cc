@@ -1,7 +1,12 @@
 #include "selfdrive/ui/qt/qt_window.h"
 
 void setMainWindow(QWidget *w) {
+  const bool generic_linux = util::getenv("OPENPILOT_BUILD_PLATFORM") == "linux_generic";
   const QSize sz = QGuiApplication::primaryScreen()->size();
+  if (generic_linux) {
+    w->setWindowFlag(Qt::FramelessWindowHint, true);
+  }
+
   if (Hardware::PC() && sz.width() <= 1920 && sz.height() <= 1080 && getenv("SCALE") == nullptr) {
     w->setMinimumSize(QSize(640, 480)); // allow resize smaller than fullscreen
     w->setMaximumSize(QSize(2160, 1080));

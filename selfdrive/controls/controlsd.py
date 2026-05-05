@@ -27,7 +27,7 @@ from selfdrive.controls.lib.events import Events, ET
 from selfdrive.controls.lib.alertmanager import AlertManager, set_offroad_alert
 from selfdrive.controls.lib.vehicle_model import VehicleModel
 from selfdrive.locationd.calibrationd import Calibration
-from selfdrive.hardware import HARDWARE, TICI, EON
+from selfdrive.hardware import HARDWARE, TICI, EON, GENERIC_LINUX
 from selfdrive.manager.process_config import managed_processes
 from selfdrive.car.hyundai.values import Buttons
 from decimal import Decimal
@@ -44,6 +44,7 @@ STEER_ANGLE_SATURATION_THRESHOLD = 2.5  # Degrees
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
 NOSENSOR = "NOSENSOR" in os.environ
+DISABLE_DRIVER_MONITORING = GENERIC_LINUX or ("DISABLE_DRIVER_MONITORING" in os.environ)
 IGNORE_PROCESSES = {"rtshield", "uploader", "deleter", "loggerd", "logmessaged", "tombstoned",
                     "logcatd", "proclogd", "clocksd", "updated", "timezoned", "manage_athenad", "statsd", "shutdownd", 'liveNaviData', 'liveENaviData', 'liveMapData'} | \
                     {k for k, v in managed_processes.items() if not v.enabled}
@@ -74,7 +75,9 @@ class Controls:
       self.pm = messaging.PubMaster(['sendcan', 'controlsState', 'carState',
                                      'carControl', 'carEvents', 'carParams'])
 
-    self.camera_packets = ["roadCameraState", "driverCameraState"]
+    self.camera_packets = ["roadCameraState"]
+    if not DISABLE_DRIVER_MONITORING:
+      self.camera_packets.append("driverCameraState")
     if TICI:
       self.camera_packets.append("wideRoadCameraState")
 
@@ -84,10 +87,15 @@ class Controls:
 
     self.sm = sm
     if self.sm is None:
-      ignore = ['driverCameraState', 'managerState'] if SIMULATION else None
-      self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'liveCalibration',
-                                     'driverMonitoringState', 'longitudinalPlan', 'lateralPlan', 'liveLocationKalman',
-                                     'managerState', 'liveParameters', 'radarState', 'liveNaviData', 'liveENaviData', 'liveMapData'] + self.camera_packets + joystick_packet,
+      ignore = ['managerState']
+      if SIMULATION or DISABLE_DRIVER_MONITORING:
+        ignore.append('driverCameraState')
+      services = ['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'liveCalibration',
+                  'longitudinalPlan', 'lateralPlan', 'liveLocationKalman',
+                  'managerState', 'liveParameters', 'radarState', 'liveNaviData', 'liveENaviData', 'liveMapData']
+      if not DISABLE_DRIVER_MONITORING:
+        services.append('driverMonitoringState')
+      self.sm = messaging.SubMaster(services + self.camera_packets + joystick_packet,
                                      ignore_alive=ignore, ignore_avg_freq=['radarState', 'longitudinalPlan'])
 
     self.can_sock = can_sock
@@ -287,7 +295,8 @@ class Controls:
       return
 
     self.events.add_from_msg(CS.events)
-    self.events.add_from_msg(self.sm['driverMonitoringState'].events)
+    if not DISABLE_DRIVER_MONITORING:
+      self.events.add_from_msg(self.sm['driverMonitoringState'].events)
 
     # Create events for battery, temperature, disk space, and memory
     if EON and (self.sm['peripheralState'].pandaType != PandaType.uno) and \
@@ -1004,8 +1013,9 @@ class Controls:
         self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
         CC.actuatorsOutput = self.last_actuators
 
-    force_decel = (self.sm['driverMonitoringState'].awarenessStatus < 0.) or \
-                  (self.state == State.softDisabling)
+    force_decel = (self.state == State.softDisabling)
+    if not DISABLE_DRIVER_MONITORING:
+      force_decel = force_decel or (self.sm['driverMonitoringState'].awarenessStatus < 0.)
 
     # Curvature & Steering angle
     params = self.sm['liveParameters']

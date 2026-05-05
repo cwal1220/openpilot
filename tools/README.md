@@ -22,6 +22,9 @@ Then, run the setup script:
 # for Ubuntu 20.04 LTS
 tools/ubuntu_setup.sh
 
+# for Orange Pi 5 / Ubuntu 24.04 / Armbian based bring-up
+tools/orangepi_setup.sh
+
 # for macOS
 tools/mac_setup.sh
 ```

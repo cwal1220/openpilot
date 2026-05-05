@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <vector>
 #include <assert.h>
 #include <errno.h>
 
@@ -59,8 +60,8 @@ int ipc_bind(const char* socket_path) {
 
 int ipc_sendrecv_with_fds(bool send, int fd, void *buf, size_t buf_size, int* fds, int num_fds,
                           int *out_num_fds) {
-  char control_buf[CMSG_SPACE(sizeof(int) * num_fds)];
-  memset(control_buf, 0, CMSG_SPACE(sizeof(int) * num_fds));
+  const size_t control_len = num_fds > 0 ? CMSG_SPACE(sizeof(int) * num_fds) : 0;
+  std::vector<char> control_buf(control_len, 0);
 
   struct iovec iov = {
     .iov_base = buf,
@@ -74,8 +75,8 @@ int ipc_sendrecv_with_fds(bool send, int fd, void *buf, size_t buf_size, int* fd
   if (num_fds > 0) {
     assert(fds);
 
-    msg.msg_control = control_buf;
-    msg.msg_controllen = CMSG_SPACE(sizeof(int) * num_fds);
+    msg.msg_control = control_buf.data();
+    msg.msg_controllen = control_len;
   }
 
   if (send) {

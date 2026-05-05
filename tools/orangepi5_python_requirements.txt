@@ -1,0 +1,16 @@
+sentry-sdk
+pycapnp
+Cython==0.29.37
+onnx
+onnxruntime
+pyzmq
+libusb1
+pyserial
+pycryptodome
+setproctitle
+tqdm
+crcmod
+casadi
+cffi
+sympy
+smbus2

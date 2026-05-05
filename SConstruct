@@ -7,6 +7,8 @@ import platform
 import numpy as np
 
 TICI = os.path.isfile('/TICI')
+SYSTEM = platform.system()
+ANDROID = SYSTEM == "Linux" and os.path.isdir('/system')
 Decider('MD5-timestamp')
 
 AddOption('--test',
@@ -52,31 +54,49 @@ AddOption('--no-thneed',
           dest='no_thneed',
           help='avoid using thneed')
 
-real_arch = arch = subprocess.check_output(["uname", "-m"], encoding='utf8').rstrip()
-if platform.system() == "Darwin":
-  arch = "Darwin"
+real_arch = subprocess.check_output(["uname", "-m"], encoding='utf8').rstrip()
+build_platform = os.getenv("OPENPILOT_BUILD_PLATFORM")
+valid_platforms = {"android_qcom", "linux_qcom", "linux_generic", "darwin"}
+if build_platform is None:
+  if SYSTEM == "Darwin":
+    build_platform = "darwin"
+  elif TICI:
+    build_platform = "linux_qcom"
+  elif ANDROID:
+    build_platform = "android_qcom"
+  else:
+    build_platform = "linux_generic"
+elif build_platform not in valid_platforms:
+  raise ValueError(f"invalid OPENPILOT_BUILD_PLATFORM '{build_platform}', expected one of {sorted(valid_platforms)}")
 
-if arch == "aarch64" and TICI:
+arch = real_arch
+if build_platform == "darwin":
+  arch = "Darwin"
+elif build_platform == "linux_qcom":
   arch = "larch64"
+
+acados_arch = "larch64" if build_platform == "linux_generic" and arch == "aarch64" else arch
 
 USE_WEBCAM = os.getenv("USE_WEBCAM") is not None
 
 lenv = {
   "PATH": os.environ['PATH'],
-  "LD_LIBRARY_PATH": [Dir(f"#third_party/acados/{arch}/lib").abspath],
+  "LD_LIBRARY_PATH": [Dir(f"#third_party/acados/{acados_arch}/lib").abspath],
   "PYTHONPATH": Dir("#").abspath + ":" + Dir("#pyextra/").abspath,
 
   "ACADOS_SOURCE_DIR": Dir("#third_party/acados/include/acados").abspath,
   "ACADOS_PYTHON_INTERFACE_PATH": Dir("#pyextra/acados_template").abspath,
-  "TERA_PATH": Dir("#").abspath + f"/third_party/acados/{arch}/t_renderer",
+  "TERA_PATH": Dir("#").abspath + f"/third_party/acados/{acados_arch}/t_renderer",
 }
 
 rpath = lenv["LD_LIBRARY_PATH"].copy()
+is_android_qcom = build_platform == "android_qcom"
+is_linux_qcom = build_platform == "linux_qcom"
 
-if arch == "aarch64" or arch == "larch64":
+if is_android_qcom or is_linux_qcom:
   lenv["LD_LIBRARY_PATH"] += ['/data/data/com.termux/files/usr/lib']
 
-  if arch == "aarch64":
+  if is_android_qcom:
     # android
     lenv["ANDROID_DATA"] = os.environ['ANDROID_DATA']
     lenv["ANDROID_ROOT"] = os.environ['ANDROID_ROOT']
@@ -90,10 +110,10 @@ if arch == "aarch64" or arch == "larch64":
     "/usr/lib",
     "/system/vendor/lib64",
     "#third_party/nanovg",
-    f"#third_party/acados/{arch}/lib",
+    f"#third_party/acados/{acados_arch}/lib",
   ]
 
-  if arch == "larch64":
+  if is_linux_qcom:
     libpath += [
       "#third_party/snpe/larch64",
       "#third_party/libyuv/larch64/lib",
@@ -130,7 +150,7 @@ else:
       f"{brew_prefix}/Library",
       f"{brew_prefix}/opt/openssl/lib",
       f"{brew_prefix}/Cellar",
-      f"#third_party/acados/{arch}/lib",
+      f"#third_party/acados/{acados_arch}/lib",
       "/System/Library/Frameworks/OpenGL.framework/Libraries",
     ]
     cflags += ["-DGL_SILENCE_DEPRECATION"]
@@ -142,20 +162,32 @@ else:
   # Linux 86_64
   else:
     libpath = [
-      "#third_party/acados/x86_64/lib",
-      "#third_party/snpe/x86_64-linux-clang",
-      "#third_party/libyuv/x64/lib",
-      "#third_party/mapbox-gl-native-qt/x86_64",
+      f"#third_party/acados/{acados_arch}/lib",
       "#cereal",
       "#selfdrive/common",
       "/usr/lib",
       "/usr/local/lib",
     ]
+    if arch == "aarch64":
+      if build_platform != "linux_generic":
+        libpath += ["#third_party/libyuv/lib"]
+      libpath += [
+        "#third_party/mapbox-gl-native-qt/aarch64",
+        "/usr/lib/aarch64-linux-gnu",
+        "/lib/aarch64-linux-gnu",
+      ]
+    else:
+      libpath += [
+        "#third_party/snpe/x86_64-linux-clang",
+        "#third_party/libyuv/x64/lib",
+        "#third_party/mapbox-gl-native-qt/x86_64",
+      ]
 
+  if arch == "x86_64":
+    rpath.append(Dir("#third_party/snpe/x86_64-linux-clang").abspath)
   rpath += [
-    Dir("#third_party/snpe/x86_64-linux-clang").abspath,
     Dir("#cereal").abspath,
-    Dir("#selfdrive/common").abspath
+    Dir("#selfdrive/common").abspath,
   ]
 
 if GetOption('asan'):
@@ -191,6 +223,7 @@ env = Environment(
     "-Wno-inconsistent-missing-override",
     "-Wno-c99-designator",
     "-Wno-reorder-init-list",
+    "-Wno-error=deprecated-declarations",
     "-Wno-error=unused-but-set-variable",
   ] + cflags + ccflags,
 
@@ -239,6 +272,11 @@ env = Environment(
   tools=["default", "cython", "compilation_db"],
 )
 
+cythonize_bin = shutil.which("cythonize") or shutil.which("cythonize3")
+if cythonize_bin is not None:
+  env["CYTHON"] = cythonize_bin
+  env["CYTHONFLAGS"] = ["--cplus"]
+
 if arch == "Darwin":
   env['RPATHPREFIX'] = "-rpath "
 
@@ -263,7 +301,7 @@ if os.environ.get('SCONS_PROGRESS'):
 SHARED = False
 
 def abspath(x):
-  if arch == 'aarch64':
+  if build_platform == "android_qcom":
     pth = os.path.join("/data/pythonpath", x[0].path)
     env.Depends(pth, x)
     return File(pth)
@@ -276,11 +314,13 @@ py_include = sysconfig.get_paths()['include']
 envCython = env.Clone()
 envCython["CPPPATH"] += [py_include, np.get_include()]
 envCython["CCFLAGS"] += ["-Wno-#warnings", "-Wno-shadow", "-Wno-deprecated-declarations"]
-
+if cythonize_bin is not None:
+  envCython["CYTHON"] = cythonize_bin
+  envCython["CYTHONFLAGS"] = ["--cplus"]
 envCython["LIBS"] = []
 if arch == "Darwin":
   envCython["LINKFLAGS"] = ["-bundle", "-undefined", "dynamic_lookup"]
-elif arch == "aarch64":
+elif build_platform == "android_qcom":
   envCython["LINKFLAGS"] = ["-shared"]
   envCython["LIBS"] = [os.path.basename(py_include)]
 else:
@@ -291,7 +331,7 @@ Export('envCython')
 # Qt build environment
 qt_env = env.Clone()
 qt_modules = ["Widgets", "Gui", "Core", "Network", "Concurrent", "Multimedia", "Quick", "Qml", "QuickWidgets", "Location", "Positioning"]
-if arch != "aarch64":
+if build_platform != "android_qcom":
   qt_modules += ["DBus"]
 
 qt_libs = []
@@ -307,7 +347,7 @@ if arch == "Darwin":
   qt_env["LINKFLAGS"] += ["-F" + os.path.join(qt_env['QTDIR'], "lib")]
   qt_env["FRAMEWORKS"] += [f"Qt{m}" for m in qt_modules] + ["OpenGL"]
   qt_env.AppendENVPath('PATH', os.path.join(qt_env['QTDIR'], "bin"))
-elif arch == "aarch64":
+elif build_platform == "android_qcom":
   qt_env['QTDIR'] = "/usr"
   qt_dirs = [
     f"/usr/include/qt",
@@ -330,7 +370,10 @@ else:
   elif arch != "Darwin":
     qt_libs += ["GL"]
 
-qt_env.Tool('qt')
+try:
+  qt_env.Tool('qt3')
+except Exception:
+  qt_env.Tool('qt')
 qt_env['CPPPATH'] += qt_dirs + ["#selfdrive/ui/qt/"]
 qt_flags = [
   "-D_REENTRANT",
@@ -343,6 +386,8 @@ qt_flags = [
   "-DQT_CORE_LIB",
   "-DQT_MESSAGELOGCONTEXT",
 ]
+qt_env['CCFLAGS'] += ["-Wno-error=deprecated-declarations"]
+qt_env['CXXFLAGS'] += ["-Wno-error=deprecated-declarations"]
 qt_env['CXXFLAGS'] += qt_flags
 qt_env['LIBPATH'] += ['#selfdrive/ui']
 qt_env['LIBS'] = qt_libs
@@ -359,6 +404,7 @@ if GetOption("clazy"):
   qt_env['ENV']['CLAZY_CHECKS'] = ','.join(checks)
 
 Export('env', 'qt_env', 'arch', 'real_arch', 'SHARED', 'USE_WEBCAM')
+Export('build_platform')
 
 SConscript(['selfdrive/common/SConscript'])
 Import('_common', '_gpucommon', '_gpu_libs')
@@ -393,7 +439,7 @@ rednose_config = {
   },
 }
 
-if arch not in ["aarch64", "larch64"]:
+if build_platform not in ["android_qcom", "linux_qcom"]:
   rednose_config['to_build'].update({
     'gnss': ('#selfdrive/locationd/models/gnss_kf.py', True, []),
     'loc_4': ('#selfdrive/locationd/models/loc_kf.py', True, []),
@@ -432,7 +478,8 @@ SConscript(['selfdrive/clocksd/SConscript'])
 SConscript(['selfdrive/loggerd/SConscript'])
 
 SConscript(['selfdrive/locationd/SConscript'])
-SConscript(['selfdrive/sensord/SConscript'])
+if os.getenv("NOSENSOR") is None:
+  SConscript(['selfdrive/sensord/SConscript'])
 SConscript(['selfdrive/ui/SConscript'])
 
 if arch != "Darwin":

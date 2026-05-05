@@ -1,6 +1,6 @@
-Import('env', 'arch', 'common', 'cereal', 'messaging')
+Import('env', 'arch', 'build_platform', 'common', 'cereal', 'messaging')
 
-if arch == "aarch64":
+if build_platform == "android_qcom":
   env.Program('_sensord', 'sensors_qcom.cc', LIBS=['hardware', common, cereal, messaging, 'capnp', 'zmq', 'kj'])
 else:
   sensors = [
@@ -17,6 +17,6 @@ else:
     'sensors/mmc5603nj_magn.cc',
   ]
   libs = [common, cereal, messaging, 'capnp', 'zmq', 'kj']
-  if arch == "larch64":
+  if build_platform in ("linux_qcom", "linux_generic"):
     libs.append('i2c')
   env.Program('_sensord', ['sensors_qcom2.cc'] + sensors, LIBS=libs)

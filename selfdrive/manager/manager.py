@@ -13,7 +13,7 @@ from common.basedir import BASEDIR
 from common.params import Params, ParamKeyType
 from common.text_window import TextWindow
 from selfdrive.boardd.set_time import set_time
-from selfdrive.hardware import HARDWARE, PC, EON
+from selfdrive.hardware import HARDWARE, PC, EON, GENERIC_LINUX
 from selfdrive.hardware.eon.apk import (pm_apply_packages, update_apks)
 from selfdrive.manager.helpers import unblock_stdout
 from selfdrive.manager.process import ensure_running
@@ -28,6 +28,9 @@ sys.path.append(os.path.join(BASEDIR, "pyextra"))
 
 
 def manager_init() -> None:
+  if GENERIC_LINUX:
+    os.environ["DISABLE_DRIVER_MONITORING"] = "1"
+
   # update system time from panda
   set_time(cloudlog)
 
@@ -317,7 +320,10 @@ def manager_init() -> None:
     os.chmod(os.path.join(BASEDIR, "cereal", "libmessaging_shared.so"), 0o755)
 
 def manager_prepare() -> None:
-  for p in managed_processes.values():
+  blocked = {x for x in os.getenv("BLOCK", "").split(",") if len(x) > 0}
+  for name, p in managed_processes.items():
+    if name in blocked:
+      continue
     p.prepare()
 
 
@@ -398,15 +404,18 @@ def manager_thread() -> None:
 
 def main() -> None:
   prepare_only = os.getenv("PREPAREONLY") is not None
+  blocked = {x for x in os.getenv("BLOCK", "").split(",") if len(x) > 0}
 
   manager_init()
-  
+
+  # Start UI early so prepare can happen in the background
+  if not prepare_only and "ui" not in blocked:
+    managed_processes['ui'].start()
+
   manager_prepare()
 
   if prepare_only:
     return
-  
-  managed_processes['ui'].start()
 
   # SystemExit on sigterm
   signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(1))

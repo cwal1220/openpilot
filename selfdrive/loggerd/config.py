@@ -1,10 +1,10 @@
 import os
 from pathlib import Path
-from selfdrive.hardware import PC
+from selfdrive.hardware import PC, GENERIC_LINUX
 
 if os.environ.get('LOG_ROOT', False):
   ROOT = os.environ['LOG_ROOT']
-elif PC:
+elif PC or GENERIC_LINUX:
   ROOT = os.path.join(str(Path.home()), ".comma", "media", "0", "realdata")
 else:
   ROOT = '/data/media/0/realdata/'
@@ -15,7 +15,7 @@ SEGMENT_LENGTH = 60
 
 STATS_DIR_FILE_LIMIT = 10000
 STATS_SOCKET = "ipc:///tmp/stats"
-if PC:
+if PC or GENERIC_LINUX:
   STATS_DIR = os.path.join(str(Path.home()), ".comma", "stats")
 else:
   STATS_DIR = "/data/stats/"

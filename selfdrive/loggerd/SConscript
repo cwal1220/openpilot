@@ -1,4 +1,4 @@
-Import('env', 'arch', 'cereal', 'messaging', 'common', 'visionipc', 'gpucommon')
+Import('env', 'arch', 'build_platform', 'cereal', 'messaging', 'common', 'visionipc', 'gpucommon')
 
 
 logger_lib = env.Library('logger', ["logger.cc"])
@@ -8,10 +8,10 @@ libs = [logger_lib, common, cereal, messaging, visionipc,
         'yuv', 'bz2', 'OpenCL']
 
 src = ['loggerd.cc']
-if arch in ["aarch64", "larch64"]:
+if build_platform in ["android_qcom", "linux_qcom"]:
   src += ['omx_encoder.cc']
   libs += ['OmxCore', 'gsl', 'CB'] + gpucommon
-  if arch == "aarch64":
+  if build_platform == "android_qcom":
     libs += ['OmxVenc', 'cutils']
   else:
     libs += ['pthread']

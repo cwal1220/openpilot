@@ -1,5 +1,5 @@
 # cython: language_level=3
-# cython: profile=True
+# cython: profile=False
 # distutils: language = c++
 
 cimport cython

@@ -1,11 +1,13 @@
 import os
 
-from selfdrive.hardware import EON, TICI, PC
+from selfdrive.hardware import EON, TICI, PC, GENERIC_LINUX
 from selfdrive.manager.process import PythonProcess, NativeProcess, DaemonProcess
 
 from common.params import Params
 
 WEBCAM = os.getenv("USE_WEBCAM") is not None
+NO_SENSOR = os.getenv("NOSENSOR") is not None
+DISABLE_DRIVER_MONITORING = GENERIC_LINUX or (os.getenv("DISABLE_DRIVER_MONITORING") is not None)
 
 EnableLogger = Params().get_bool('OpkrEnableLogger')
 EnableUploader = Params().get_bool('OpkrEnableUploader')
@@ -20,14 +22,15 @@ procs = [
   # due to qualcomm kernel bugs SIGKILLing camerad sometimes causes page table corruption
   NativeProcess("camerad", "selfdrive/camerad", ["./camerad"], unkillable=True, driverview=True),
   NativeProcess("clocksd", "selfdrive/clocksd", ["./clocksd"]),
-  NativeProcess("dmonitoringmodeld", "selfdrive/modeld", ["./dmonitoringmodeld"], enabled=(not PC or WEBCAM), driverview=True),
-  NativeProcess("logcatd", "selfdrive/logcatd", ["./logcatd"]),
+  NativeProcess("dmonitoringmodeld", "selfdrive/modeld", ["./dmonitoringmodeld"],
+                enabled=((not PC or WEBCAM) and not DISABLE_DRIVER_MONITORING), driverview=True),
+  NativeProcess("logcatd", "selfdrive/logcatd", ["./logcatd"], enabled=(not PC and not GENERIC_LINUX)),
   #NativeProcess("loggerd", "selfdrive/loggerd", ["./loggerd"]),
   NativeProcess("modeld", "selfdrive/modeld", ["./modeld"]),
   #NativeProcess("navd", "selfdrive/ui/navd", ["./navd"], enabled=(PC or TICI or EON), persistent=True),
   NativeProcess("proclogd", "selfdrive/proclogd", ["./proclogd"]),
-  NativeProcess("sensord", "selfdrive/sensord", ["./sensord"], enabled=not PC, persistent=EON, sigkill=EON),
-  NativeProcess("ubloxd", "selfdrive/locationd", ["./ubloxd"], enabled=(not PC or WEBCAM)),
+  NativeProcess("sensord", "selfdrive/sensord", ["./sensord"], enabled=(not PC and not GENERIC_LINUX and not NO_SENSOR), persistent=EON, sigkill=EON),
+  NativeProcess("ubloxd", "selfdrive/locationd", ["./ubloxd"], enabled=((not PC or WEBCAM) and not GENERIC_LINUX and not NO_SENSOR)),
   NativeProcess("ui", "selfdrive/ui", ["./ui"], persistent=True, watchdog_max_dt=(5 if TICI else None)),
   NativeProcess("soundd", "selfdrive/ui/soundd", ["./soundd"], persistent=True),
   NativeProcess("locationd", "selfdrive/locationd", ["./locationd"]),
@@ -35,7 +38,8 @@ procs = [
   PythonProcess("calibrationd", "selfdrive.locationd.calibrationd"),
   PythonProcess("controlsd", "selfdrive.controls.controlsd"),
   #PythonProcess("deleter", "selfdrive.loggerd.deleter", persistent=True),
-  PythonProcess("dmonitoringd", "selfdrive.monitoring.dmonitoringd", enabled=(not PC or WEBCAM), driverview=True),
+  PythonProcess("dmonitoringd", "selfdrive.monitoring.dmonitoringd",
+                enabled=((not PC or WEBCAM) and not DISABLE_DRIVER_MONITORING), driverview=True),
   #PythonProcess("logmessaged", "selfdrive.logmessaged", persistent=True),
   PythonProcess("pandad", "selfdrive.boardd.pandad", persistent=True),
   PythonProcess("paramsd", "selfdrive.locationd.paramsd"),

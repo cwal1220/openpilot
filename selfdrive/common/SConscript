@@ -1,4 +1,4 @@
-Import('env', 'arch', 'SHARED')
+Import('env', 'arch', 'build_platform', 'SHARED')
 
 if SHARED:
   fxn = env.SharedLibrary
@@ -22,7 +22,7 @@ files = [
   'visionimg.cc',
 ]
 
-if arch == "aarch64":
+if build_platform == "android_qcom":
   _gpu_libs = ['gui', 'adreno_utils']
 elif arch == "larch64":
   _gpu_libs = ["GLESv2"]

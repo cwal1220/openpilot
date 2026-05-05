@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdio>
 #include <chrono>
+#include <cstring>
 #include <thread>
 
 #include "libyuv.h"
@@ -159,6 +160,7 @@ bool CameraBuf::acquire() {
 
   cur_frame_data = camera_bufs_metadata[cur_buf_idx];
   cur_rgb_buf = vipc_server->get_buffer(rgb_type);
+  cur_yuv_buf = vipc_server->get_buffer(yuv_type);
   cl_mem camrabuf_cl = camera_bufs[cur_buf_idx].buf_cl;
   cl_event event;
 
@@ -175,16 +177,35 @@ bool CameraBuf::acquire() {
 #endif
 
     debayer->queue(q, camrabuf_cl, cur_rgb_buf->buf_cl, rgb_width, rgb_height, gain, black_level, &event);
+    clWaitForEvents(1, &event);
+    CL_CHECK(clReleaseEvent(event));
   } else {
     assert(rgb_stride == camera_state->ci.frame_stride);
+#ifdef WEBCAM
+    std::memcpy(cur_rgb_buf->addr, camera_bufs[cur_buf_idx].addr, cur_rgb_buf->len);
+#else
     CL_CHECK(clEnqueueCopyBuffer(q, camrabuf_cl, cur_rgb_buf->buf_cl, 0, 0, cur_rgb_buf->len, 0, 0, &event));
+    clWaitForEvents(1, &event);
+    CL_CHECK(clReleaseEvent(event));
+#endif
   }
 
-  clWaitForEvents(1, &event);
-  CL_CHECK(clReleaseEvent(event));
-
-  cur_yuv_buf = vipc_server->get_buffer(yuv_type);
-  rgb2yuv->queue(q, cur_rgb_buf->buf_cl, cur_yuv_buf->buf_cl);
+#ifdef WEBCAM
+  if (!debayer) {
+    int result = libyuv::RGB24ToI420(
+        (const uint8_t *)cur_rgb_buf->addr, rgb_stride,
+        cur_yuv_buf->y, rgb_width,
+        cur_yuv_buf->u, rgb_width / 2,
+        cur_yuv_buf->v, rgb_width / 2,
+        rgb_width, rgb_height);
+    if (result != 0) {
+      LOGE("RGB24ToI420 failed: %d", result);
+    }
+  } else
+#endif
+  {
+    rgb2yuv->queue(q, cur_rgb_buf->buf_cl, cur_yuv_buf->buf_cl);
+  }
 
   cur_frame_data.processing_time = (millis_since_boot() - start_time) / 1000.0;
 
@@ -195,8 +216,13 @@ bool CameraBuf::acquire() {
   };
   cur_rgb_buf->set_frame_id(cur_frame_data.frame_id);
   cur_yuv_buf->set_frame_id(cur_frame_data.frame_id);
-  vipc_server->send(cur_yuv_buf, &extra);
-  vipc_server->send(cur_rgb_buf, &extra);
+#ifdef WEBCAM
+  const bool sync_buffers = debayer != nullptr;
+#else
+  const bool sync_buffers = true;
+#endif
+  vipc_server->send(cur_yuv_buf, &extra, sync_buffers);
+  vipc_server->send(cur_rgb_buf, &extra, sync_buffers);
 
   return true;
 }

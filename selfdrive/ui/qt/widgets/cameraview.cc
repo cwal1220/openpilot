@@ -173,12 +173,16 @@ void CameraViewWidget::updateFrameMat(int w, int h) {
       if (stream_type == VISION_STREAM_RGB_WIDE_ROAD) {
         zoom *= 0.5;
       }
-      float zx = zoom * 2 * intrinsic_matrix.v[2] / width();
-      float zy = zoom * 2 * intrinsic_matrix.v[5] / height();
+      const float frame_width = stream_width > 0 ? stream_width : intrinsic_matrix.v[2] * 2.0f;
+      const float frame_height = stream_height > 0 ? stream_height : intrinsic_matrix.v[5] * 2.0f;
+      const float zx = zoom * frame_width / w;
+      const float zy = zoom * frame_height / h;
+      const float tx = zoom * (frame_width - 2.0f * intrinsic_matrix.v[2]) / w;
+      const float ty = zoom * (2.0f * intrinsic_matrix.v[5] - frame_height) / h - y_offset / h * 2.0f;
 
       const mat4 frame_transform = {{
-        zx, 0.0, 0.0, 0.0,
-        0.0, zy, 0.0, -y_offset / height() * 2,
+        zx, 0.0, 0.0, tx,
+        0.0, zy, 0.0, ty,
         0.0, 0.0, 1.0, 0.0,
         0.0, 0.0, 0.0, 1.0,
       }};

@@ -171,7 +171,9 @@ void queue_frame(CameraState *s, const cv::Mat &input_frame, uint32_t *frame_id,
     LOGW("%s webcam queued first frame len=%zu pending=%zu",
          s->camera_num == 0 ? "road" : "driver", frame_len, s->buf.pending_frames());
   }
-  buf.sync(VISIONBUF_SYNC_TO_DEVICE);
+  if (s->ci.bayer) {
+    buf.sync(VISIONBUF_SYNC_TO_DEVICE);
+  }
   s->buf.queue(*buf_idx);
   *buf_idx = (*buf_idx + 1) % FRAME_BUF_COUNT;
 }
@@ -256,7 +258,9 @@ void process_road_camera(MultiCameraState *s, CameraState *c, int cnt) {
   MessageBuilder msg;
   auto framed = msg.initEvent().initRoadCameraState();
   fill_frame_data(framed, b->cur_frame_data);
-  framed.setImage(kj::arrayPtr((const uint8_t *)b->cur_yuv_buf->addr, b->cur_yuv_buf->len));
+  if (env_send_road) {
+    framed.setImage(get_frame_image(b));
+  }
   framed.setTransform(b->yuv_transform.v);
   s->pm->send("roadCameraState", msg);
 }

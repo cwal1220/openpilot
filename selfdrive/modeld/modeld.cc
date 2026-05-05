@@ -107,8 +107,9 @@ void run_model(ModelState &model, VisionIpcClient &vipc_client_main, VisionIpcCl
           meta_extra.frame_id, double(meta_extra.timestamp_sof) / 1e9);
       }
     } else {
-      // Use single camera
-      buf_extra = buf_main;
+      // Single webcam has no real wide/extra stream. Keep the metadata aligned
+      // for publishing, but do not preprocess the same frame twice.
+      buf_extra = nullptr;
       meta_extra = meta_main;
     }
 

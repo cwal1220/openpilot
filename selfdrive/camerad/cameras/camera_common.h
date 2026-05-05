@@ -122,6 +122,7 @@ public:
   bool acquire();
   void release();
   void queue(size_t buf_idx);
+  size_t pending_frames() const { return safe_queue.size(); }
 };
 
 typedef void (*process_thread_cb)(MultiCameraState *s, CameraState *c, int cnt);

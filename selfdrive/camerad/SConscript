@@ -1,11 +1,11 @@
-Import('env', 'arch', 'cereal', 'messaging', 'common', 'gpucommon', 'visionipc', 'USE_WEBCAM')
+Import('env', 'arch', 'build_platform', 'cereal', 'messaging', 'common', 'gpucommon', 'visionipc', 'USE_WEBCAM')
 
 libs = ['m', 'pthread', common, 'jpeg', 'OpenCL', 'yuv', cereal, messaging, 'zmq', 'capnp', 'kj', visionipc, gpucommon]
 
-if arch == "aarch64":
+if build_platform == "android_qcom":
   libs += ['gsl', 'CB', 'adreno_utils', 'EGL', 'GLESv3', 'cutils', 'ui']
   cameras = ['cameras/camera_qcom.cc']
-elif arch == "larch64":
+elif build_platform == "linux_qcom":
   libs += ['atomic']
   cameras = ['cameras/camera_qcom2.cc']
 else:

@@ -2,6 +2,7 @@
 
 #include <array>
 #include "selfdrive/common/mat.h"
+#include "selfdrive/common/util.h"
 #include "selfdrive/hardware/hw.h"
 
 const int  TRAJECTORY_SIZE = 33;
@@ -32,10 +33,24 @@ namespace tici_dm_crop {
   const int width = 954;
 };
 
+static inline mat3 get_webcam_fcam_intrinsic_matrix() {
+  const float width = util::getenv("ROADCAM_WIDTH", 1280);
+  const float height = util::getenv("ROADCAM_HEIGHT", 720);
+  const float default_focal = width * (910.0f / 1164.0f);
+  const float fx = util::getenv("WEBCAM_FX", util::getenv("WEBCAM_FOCAL", default_focal));
+  const float fy = util::getenv("WEBCAM_FY", util::getenv("WEBCAM_FOCAL", default_focal));
+  const float cx = util::getenv("WEBCAM_CX", width / 2.0f);
+  const float cy = util::getenv("WEBCAM_CY", height / 2.0f);
+  return (mat3){{fx, 0.0, cx,
+                 0.0, fy, cy,
+                 0.0, 0.0, 1.0}};
+}
+
 const mat3 fcam_intrinsic_matrix =
     Hardware::EON() ? (mat3){{910., 0., 1164.0 / 2,
                               0., 910., 874.0 / 2,
                               0., 0., 1.}}
+                    : (Hardware::PC() && util::getenv("USE_WEBCAM", 0) == 1) ? get_webcam_fcam_intrinsic_matrix()
                     : (mat3){{2648.0, 0.0, 1928.0 / 2,
                               0.0, 2648.0, 1208.0 / 2,
                               0.0, 0.0, 1.0}};

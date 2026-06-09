@@ -13,13 +13,31 @@
 #define MODEL_HEIGHT 640
 #define FULL_W 852 // should get these numbers from camerad
 
+#ifdef USE_K230_KMODEL
+class NoopDMonitoringModel final : public RunModel {
+public:
+  NoopDMonitoringModel(float *out, size_t out_size) : output(out), output_size(out_size) {}
+
+  void execute() override {
+    memset(output, 0, output_size * sizeof(float));
+  }
+
+private:
+  float *output = nullptr;
+  size_t output_size = 0;
+};
+#endif
+
 void dmonitoring_init(DMonitoringModelState* s) {
   s->is_rhd = Params().getBool("IsRHD");
+  memset(s->output, 0, sizeof(s->output));
   for (int x = 0; x < std::size(s->tensor); ++x) {
     s->tensor[x] = (x - 128.f) * 0.0078125f;
   }
 
-#ifdef USE_ONNX_MODEL
+#ifdef USE_K230_KMODEL
+  s->m = new NoopDMonitoringModel(&s->output[0], OUTPUT_SIZE);
+#elif defined(USE_ONNX_MODEL)
   s->m = new ONNXModel("models/dmonitoring_model.onnx", &s->output[0], OUTPUT_SIZE, USE_DSP_RUNTIME);
 #else
   s->m = new SNPEModel("models/dmonitoring_model_q.dlc", &s->output[0], OUTPUT_SIZE, USE_DSP_RUNTIME);

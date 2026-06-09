@@ -5,6 +5,7 @@ import sys
 import sysconfig
 import platform
 import numpy as np
+from SCons.Errors import UserError
 
 TICI = os.path.isfile('/TICI')
 Decider('MD5-timestamp')
@@ -59,17 +60,38 @@ if platform.system() == "Darwin":
 if arch == "aarch64" and TICI:
   arch = "larch64"
 
+arch = os.environ.get("OPENPILOT_TARGET_ARCH", arch)
+
+sysroot = os.environ.get("OPENPILOT_SYSROOT", "")
+def sysroot_path(path):
+  return os.path.join(sysroot, path[1:]) if sysroot and path.startswith("/") else path
+
+linux_multiarch = os.environ.get(
+  "OPENPILOT_LINUX_MULTIARCH",
+  "riscv64-linux-gnu" if arch == "riscv64" else f"{real_arch}-linux-gnu",
+)
+acados_arch = os.environ.get("OPENPILOT_ACADOS_ARCH", arch)
+host_tool_arch = os.environ.get(
+  "OPENPILOT_HOST_TOOL_ARCH",
+  arch if arch in (real_arch, "Darwin") else ("larch64" if real_arch in ("aarch64", "arm64") else real_arch),
+)
+acados_tool_arch = os.environ.get("OPENPILOT_ACADOS_TOOL_ARCH", host_tool_arch)
+acados_lib_dir = Dir(f"#third_party/acados/{acados_arch}/lib").abspath
+
 USE_WEBCAM = os.getenv("USE_WEBCAM") is not None
 
 lenv = {
   "PATH": os.environ['PATH'],
-  "LD_LIBRARY_PATH": [Dir(f"#third_party/acados/{arch}/lib").abspath],
+  "LD_LIBRARY_PATH": [acados_lib_dir],
   "PYTHONPATH": Dir("#").abspath + ":" + Dir("#pyextra/").abspath,
 
-  "ACADOS_SOURCE_DIR": Dir("#third_party/acados/include/acados").abspath,
-  "ACADOS_PYTHON_INTERFACE_PATH": Dir("#pyextra/acados_template").abspath,
-  "TERA_PATH": Dir("#").abspath + f"/third_party/acados/{arch}/t_renderer",
+  "ACADOS_SOURCE_DIR": os.environ.get("ACADOS_SOURCE_DIR", Dir("#third_party/acados/include/acados").abspath),
+  "ACADOS_PYTHON_INTERFACE_PATH": os.environ.get("ACADOS_PYTHON_INTERFACE_PATH", Dir("#pyextra/acados_template").abspath),
+  "TERA_PATH": os.environ.get("TERA_PATH", File(f"#third_party/acados/{acados_tool_arch}/t_renderer").abspath),
 }
+for key in ("PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR", "PKG_CONFIG_SYSROOT_DIR", "QMAKESPEC"):
+  if key in os.environ:
+    lenv[key] = os.environ[key]
 
 rpath = lenv["LD_LIBRARY_PATH"].copy()
 
@@ -139,6 +161,25 @@ else:
       f"{brew_prefix}/include",
       f"{brew_prefix}/opt/openssl/include",
     ]
+  elif arch == "riscv64":
+    libpath = [
+      f"#third_party/acados/{acados_arch}/lib",
+      sysroot_path(f"/usr/lib/{linux_multiarch}"),
+      sysroot_path(f"/lib/{linux_multiarch}"),
+      sysroot_path("/usr/local/lib"),
+      sysroot_path("/usr/lib"),
+      sysroot_path("/lib"),
+    ]
+    cpppath += [
+      sysroot_path(f"/usr/include/{linux_multiarch}"),
+      sysroot_path("/usr/include/libdrm"),
+      sysroot_path("/usr/include"),
+    ]
+    rpath += [
+      Dir("#cereal").abspath,
+      Dir("#selfdrive/common").abspath,
+      acados_lib_dir,
+    ]
   # Linux 86_64
   else:
     libpath = [
@@ -152,11 +193,11 @@ else:
       "/usr/local/lib",
     ]
 
-  rpath += [
-    Dir("#third_party/snpe/x86_64-linux-clang").abspath,
-    Dir("#cereal").abspath,
-    Dir("#selfdrive/common").abspath
-  ]
+    rpath += [
+      Dir("#third_party/snpe/x86_64-linux-clang").abspath,
+      Dir("#cereal").abspath,
+      Dir("#selfdrive/common").abspath
+    ]
 
 if GetOption('asan'):
   ccflags = ["-fsanitize=address", "-fno-omit-frame-pointer"]
@@ -168,6 +209,11 @@ else:
   ccflags = []
   ldflags = []
 
+if sysroot:
+  cflags += [f"--sysroot={sysroot}"]
+  cxxflags += [f"--sysroot={sysroot}"]
+  ldflags += [f"--sysroot={sysroot}"]
+
 # no --as-needed on mac linker
 if arch != "Darwin":
   ldflags += ["-Wl,--as-needed", "-Wl,--no-undefined"]
@@ -176,23 +222,57 @@ if arch != "Darwin":
 cflags += ['-DSWAGLOG="\\"selfdrive/common/swaglog.h\\""']
 cxxflags += ['-DSWAGLOG="\\"selfdrive/common/swaglog.h\\""']
 
+target_ccflags = []
+if arch == "riscv64":
+  target_ccflags += [
+    "-Wno-error=cpp",
+    "-Wno-error=deprecated-declarations",
+    "-Wno-error=format-truncation",
+    "-Wno-error=ignored-attributes",
+    "-Wno-error=shadow",
+  ]
+
+cross_build = arch not in ("Darwin", real_arch)
+default_cc = "riscv64-linux-gnu-gcc" if arch == "riscv64" and cross_build else ("gcc" if arch == "riscv64" else "clang")
+default_cxx = "riscv64-linux-gnu-g++" if arch == "riscv64" and cross_build else ("g++" if arch == "riscv64" else "clang++")
+default_ar = "riscv64-linux-gnu-ar" if arch == "riscv64" and cross_build else "ar"
+default_ranlib = "riscv64-linux-gnu-ranlib" if arch == "riscv64" and cross_build else "ranlib"
+cc = os.environ.get("CC", default_cc)
+cxx = os.environ.get("CXX", default_cxx)
+ar = os.environ.get("AR", default_ar)
+ranlib = os.environ.get("RANLIB", default_ranlib)
+if shutil.which(cc) is None:
+  if cross_build:
+    raise UserError(f"missing target C compiler: {cc}")
+  cc = "gcc"
+if shutil.which(cxx) is None:
+  if cross_build:
+    raise UserError(f"missing target C++ compiler: {cxx}")
+  cxx = "g++"
+
+common_warning_flags = [
+  "-g",
+  "-fPIC",
+  "-O2",
+  "-Wunused",
+  "-Werror",
+  "-Wshadow",
+  "-Wno-error=unused-but-set-variable",
+  "-Wno-error=unused-result",
+]
+
+cxx_warning_flags = [
+  "-Wno-unknown-warning-option",
+  "-Wno-deprecated-register",
+  "-Wno-register",
+  "-Wno-inconsistent-missing-override",
+  "-Wno-c99-designator",
+  "-Wno-reorder-init-list",
+]
+
 env = Environment(
   ENV=lenv,
-  CCFLAGS=[
-    "-g",
-    "-fPIC",
-    "-O2",
-    "-Wunused",
-    "-Werror",
-    "-Wshadow",
-    "-Wno-unknown-warning-option",
-    "-Wno-deprecated-register",
-    "-Wno-register",
-    "-Wno-inconsistent-missing-override",
-    "-Wno-c99-designator",
-    "-Wno-reorder-init-list",
-    "-Wno-error=unused-but-set-variable",
-  ] + cflags + ccflags,
+  CCFLAGS=common_warning_flags + target_ccflags + cflags + ccflags,
 
   CPPPATH=cpppath + [
     "#",
@@ -219,14 +299,16 @@ env = Environment(
     "#opendbc/can",
   ],
 
-  CC='clang',
-  CXX='clang++',
+  CC=cc,
+  CXX=cxx,
+  AR=ar,
+  RANLIB=ranlib,
   LINKFLAGS=ldflags,
 
   RPATH=rpath,
 
   CFLAGS=["-std=gnu11"] + cflags,
-  CXXFLAGS=["-std=c++1z"] + cxxflags,
+  CXXFLAGS=["-std=c++1z"] + cxx_warning_flags + cxxflags,
   LIBPATH=libpath + [
     "#cereal",
     "#third_party",
@@ -272,19 +354,24 @@ def abspath(x):
     return x[0].path.rsplit("/", 1)[1][:-3]
 
 # Cython build enviroment
-py_include = sysconfig.get_paths()['include']
+py_include = os.environ.get("OPENPILOT_PYTHON_INCLUDE", sysconfig.get_paths()['include'])
+py_libname = os.environ.get("OPENPILOT_PYTHON_LIBNAME")
 envCython = env.Clone()
 envCython["CPPPATH"] += [py_include, np.get_include()]
 envCython["CCFLAGS"] += ["-Wno-#warnings", "-Wno-shadow", "-Wno-deprecated-declarations"]
+if os.environ.get("OPENPILOT_PYTHON_LIB"):
+  envCython["LIBPATH"] += [os.environ["OPENPILOT_PYTHON_LIB"]]
 
 envCython["LIBS"] = []
 if arch == "Darwin":
   envCython["LINKFLAGS"] = ["-bundle", "-undefined", "dynamic_lookup"]
 elif arch == "aarch64":
-  envCython["LINKFLAGS"] = ["-shared"]
-  envCython["LIBS"] = [os.path.basename(py_include)]
+  envCython["LINKFLAGS"] = ldflags + ["-shared"]
+  envCython["LIBS"] = [py_libname or os.path.basename(py_include)]
 else:
-  envCython["LINKFLAGS"] = ["-pthread", "-shared"]
+  envCython["LINKFLAGS"] = ldflags + ["-pthread", "-shared"]
+  if arch == "riscv64":
+    envCython["LIBS"] = [py_libname or "python3.12"]
 
 Export('envCython')
 
@@ -316,6 +403,18 @@ elif arch == "aarch64":
 
   qt_libs = [f"Qt5{m}" for m in qt_modules]
   qt_libs += ['EGL', 'GLESv3', 'c++_shared']
+elif arch == "riscv64":
+  qt_env['QTDIR'] = sysroot_path("/usr")
+  qt_include_root = os.environ.get("OPENPILOT_QT_INCLUDE_ROOT", sysroot_path(f"/usr/include/{linux_multiarch}/qt5"))
+  qt_dirs = [
+    qt_include_root,
+    f"{qt_include_root}/QtGui/5.15.13/QtGui",
+    f"{qt_include_root}/QtGui/5.12.8/QtGui",
+  ]
+  qt_dirs += [f"{qt_include_root}/Qt{m}" for m in qt_modules]
+
+  qt_libs = [f"Qt5{m}" for m in qt_modules]
+  qt_libs += ["GL"]
 else:
   qt_env['QTDIR'] = "/usr"
   qt_dirs = [
@@ -330,7 +429,10 @@ else:
   elif arch != "Darwin":
     qt_libs += ["GL"]
 
-qt_env.Tool('qt')
+try:
+  qt_env.Tool('qt')
+except UserError:
+  qt_env.Tool('qt3')
 qt_env['CPPPATH'] += qt_dirs + ["#selfdrive/ui/qt/"]
 qt_flags = [
   "-D_REENTRANT",

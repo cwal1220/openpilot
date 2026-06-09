@@ -1,4 +1,5 @@
 import os
+from SCons.Errors import UserError
 
 Import('env', 'arch', 'cereal', 'messaging', 'common', 'gpucommon', 'visionipc')
 lenv = env.Clone()
@@ -43,7 +44,35 @@ if arch == "aarch64" or arch == "larch64":
 else:
   libs += ['pthread']
 
-  if not GetOption('snpe'):
+  if arch == "riscv64":
+    del libs[libs.index('SNPE')]
+    del libs[libs.index('symphony-cpu')]
+    del common_src[common_src.index('runners/snpemodel.cc')]
+    common_src += ['runners/k230model.cc', 'runners/k230_mmz.c']
+    lenv['CFLAGS'].append("-DUSE_K230_KMODEL")
+    lenv['CXXFLAGS'].append("-DUSE_K230_KMODEL")
+
+    nncase_dir = os.path.abspath(os.environ.get("K230_NNCASE_DIR", Dir("#third_party/nncase_k230").abspath))
+    nncase_include = os.path.join(nncase_dir, "include")
+    nncase_lib = os.path.join(nncase_dir, "lib")
+    nncase_libs = [
+      os.path.join(nncase_lib, "libNncase.Runtime.Native.a"),
+      os.path.join(nncase_lib, "libnncase.rt_modules.k230.a"),
+      os.path.join(nncase_lib, "libfunctional_k230.a"),
+    ]
+    missing_nncase = [p for p in [os.path.join(nncase_include, "nncase/runtime/interpreter.h")] + nncase_libs if not os.path.exists(p)]
+    if missing_nncase:
+      raise UserError("missing K230 nncase runtime; run scripts/k230_install_nncase_runtime.sh")
+
+    lenv['CXXFLAGS'] += ["-isystem", nncase_include, "-Wno-error=multichar"]
+    libs += [
+      File(nncase_libs[0]),
+      File(nncase_libs[1]),
+      File(nncase_libs[2]),
+      'atomic',
+      'dl',
+    ]
+  elif not GetOption('snpe'):
     # for onnx support
     common_src += ['runners/onnxmodel.cc']
 

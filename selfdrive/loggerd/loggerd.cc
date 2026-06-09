@@ -1,5 +1,7 @@
 #include "selfdrive/loggerd/loggerd.h"
 
+#include <utility>
+
 ExitHandler do_exit;
 
 // Handle initial encoder syncing by waiting for all encoders to reach the same frame id

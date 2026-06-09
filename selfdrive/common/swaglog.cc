@@ -5,6 +5,7 @@
 #include "selfdrive/common/swaglog.h"
 
 #include <cassert>
+#include <cstdarg>
 #include <cstring>
 #include <mutex>
 #include <string>

@@ -3,7 +3,10 @@ import os
 import sys
 import struct
 import hashlib
-from Crypto.PublicKey import RSA
+try:
+  from Crypto.PublicKey import RSA
+except ModuleNotFoundError:
+  from Cryptodome.PublicKey import RSA
 import binascii
 
 # increment this to make new hardware not run old versions

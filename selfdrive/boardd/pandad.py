@@ -34,6 +34,9 @@ def flash_panda(panda_serial: str) -> Panda:
   cloudlog.warning(f"Panda {panda_serial} connected, version: {panda_version}, signature {panda_signature.hex()[:16]}, expected {fw_signature.hex()[:16]}")
 
   if panda.bootstub or panda_signature != fw_signature:
+    if os.getenv("OPENPILOT_TARGET_ARCH") == "riscv64":
+      cloudlog.warning("Panda firmware differs on riscv64; using existing panda firmware")
+      return panda
     cloudlog.info("Panda firmware out of date, update required")
     panda.flash()
     cloudlog.info("Done flashing")
@@ -84,6 +87,9 @@ def main() -> NoReturn:
 
       # Flash all Pandas in DFU mode
       for p in PandaDFU.list():
+        if os.getenv("OPENPILOT_TARGET_ARCH") == "riscv64":
+          cloudlog.warning(f"Panda in DFU mode found on riscv64; skipping recovery {p}")
+          continue
         cloudlog.info(f"Panda in DFU mode found, flashing recovery {p}")
         PandaDFU(p).recover()
       time.sleep(1)

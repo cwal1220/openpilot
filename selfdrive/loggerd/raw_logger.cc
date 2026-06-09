@@ -16,6 +16,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/error.h>
 #include <libavutil/imgutils.h>
 }
 
@@ -28,7 +29,9 @@ RawLogger::RawLogger(const char* filename, int width, int height, int fps,
 
   // TODO: respect write arg
 
+#if LIBAVFORMAT_VERSION_MAJOR < 58
   av_register_all();
+#endif
   codec = avcodec_find_encoder(AV_CODEC_ID_FFVHUFF);
   // codec = avcodec_find_encoder(AV_CODEC_ID_FFV1);
   assert(codec);
@@ -44,7 +47,7 @@ RawLogger::RawLogger(const char* filename, int width, int height, int fps,
   // ffv1enc doesn't respect AV_PICTURE_TYPE_I. make every frame a key frame for now.
   // codec_ctx->gop_size = 0;
 
-  codec_ctx->time_base = (AVRational){ 1, fps };
+  codec_ctx->time_base = { 1, fps };
 
   int err = avcodec_open2(codec_ctx, codec, NULL);
   assert(err >= 0);
@@ -65,8 +68,7 @@ RawLogger::RawLogger(const char* filename, int width, int height, int fps,
 
 RawLogger::~RawLogger() {
   av_frame_free(&frame);
-  avcodec_close(codec_ctx);
-  av_free(codec_ctx);
+  avcodec_free_context(&codec_ctx);
 }
 
 void RawLogger::encoder_open(const char* path) {
@@ -89,7 +91,7 @@ void RawLogger::encoder_open(const char* path) {
   // AVStream *stream = avformat_new_stream(format_ctx, NULL);
   assert(stream);
   stream->id = 0;
-  stream->time_base = (AVRational){ 1, fps };
+  stream->time_base = { 1, fps };
   // codec_ctx->time_base = stream->time_base;
 
   int err = avcodec_parameters_from_context(stream->codecpar, codec_ctx);
@@ -111,8 +113,6 @@ void RawLogger::encoder_close() {
   int err = av_write_trailer(format_ctx);
   assert(err == 0);
 
-  avcodec_close(stream->codec);
-
   err = avio_closep(&format_ctx->pb);
   assert(err == 0);
 
@@ -125,11 +125,6 @@ void RawLogger::encoder_close() {
 
 int RawLogger::encode_frame(const uint8_t *y_ptr, const uint8_t *u_ptr, const uint8_t *v_ptr,
                             int in_width, int in_height, uint64_t ts) {
-  AVPacket pkt;
-  av_init_packet(&pkt);
-  pkt.data = NULL;
-  pkt.size = 0;
-
   if (downscale_buf.size() > 0) {
     uint8_t *out_y = downscale_buf.data();
     uint8_t *out_u = out_y + codec_ctx->width * codec_ctx->height;
@@ -155,24 +150,44 @@ int RawLogger::encode_frame(const uint8_t *y_ptr, const uint8_t *u_ptr, const ui
 
   int ret = counter;
 
-  int got_output = 0;
-  int err = avcodec_encode_video2(codec_ctx, &pkt, frame, &got_output);
-  if (err) {
+  int err = avcodec_send_frame(codec_ctx, frame);
+  if (err < 0) {
     LOGE("encoding error\n");
     ret = -1;
-  } else if (got_output) {
-    av_packet_rescale_ts(&pkt, codec_ctx->time_base, stream->time_base);
-    pkt.stream_index = 0;
+  } else {
+    bool wrote_packet = false;
+    while (true) {
+      AVPacket *pkt = av_packet_alloc();
+      assert(pkt);
 
-    err = av_interleaved_write_frame(format_ctx, &pkt);
-    if (err < 0) {
-      LOGE("encoder writer error\n");
-      ret = -1;
-    } else {
+      err = avcodec_receive_packet(codec_ctx, pkt);
+      if (err == AVERROR(EAGAIN) || err == AVERROR_EOF) {
+        av_packet_free(&pkt);
+        break;
+      } else if (err < 0) {
+        av_packet_free(&pkt);
+        LOGE("encoding error\n");
+        ret = -1;
+        break;
+      }
+
+      av_packet_rescale_ts(pkt, codec_ctx->time_base, stream->time_base);
+      pkt->stream_index = 0;
+
+      err = av_interleaved_write_frame(format_ctx, pkt);
+      av_packet_free(&pkt);
+      if (err < 0) {
+        LOGE("encoder writer error\n");
+        ret = -1;
+        break;
+      }
+      wrote_packet = true;
+    }
+
+    if (wrote_packet && ret != -1) {
       counter++;
     }
   }
 
-  av_packet_unref(&pkt);
   return ret;
 }

@@ -213,7 +213,7 @@ def make_ocp_dims_consistent(acados_ocp):
 
     ## constraints
     # initial
-    if (constraints.lbx_0 == [] and constraints.ubx_0 == []):
+    if (is_empty(constraints.lbx_0) and is_empty(constraints.ubx_0)):
         dims.nbx_0 = 0
     else:
         this_shape = constraints.lbx_0.shape
@@ -224,7 +224,7 @@ def make_ocp_dims_consistent(acados_ocp):
             raise Exception('lbx_0, ubx_0 must be column vectors!')
         dims.nbx_0 = constraints.lbx_0.size
 
-    if all(constraints.lbx_0 == constraints.ubx_0) and dims.nbx_0 == dims.nx \
+    if dims.nbx_0 > 0 and all(constraints.lbx_0 == constraints.ubx_0) and dims.nbx_0 == dims.nx \
         and dims.nbxe_0 is None \
         and (constraints.idxbxe_0.shape == constraints.idxbx_0.shape)\
             and all(constraints.idxbxe_0 == constraints.idxbx_0):

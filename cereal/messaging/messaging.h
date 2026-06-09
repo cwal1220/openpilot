@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <map>
 #include <string>
+#include <time.h>
 #include <vector>
 #include <capnp/serialize.h>
 #include "../gen/cpp/log.capnp.h"

@@ -1,6 +1,7 @@
 #include "selfdrive/ui/paint.h"
 
 #include <cassert>
+#include <cstdarg>
 #include <cmath>
 
 #ifdef __APPLE__
@@ -1235,7 +1236,7 @@ static void bb_ui_draw_measures_left(UIState *s, int bb_x, int bb_y, int bb_w ) 
     } else {
       snprintf(val_str, sizeof(val_str), "-");
     }
-    snprintf(uom_str, sizeof(uom_str), "");
+    uom_str[0] = '\0';
     bb_ry +=bb_ui_draw_measure(s, val_str, uom_str, "SteerTorq",
         bb_rx, bb_ry, bb_uom_dx,
         val_color, lab_color, uom_color,

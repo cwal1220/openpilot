@@ -2,11 +2,13 @@
 import os
 import numpy as np
 
-from common.realtime import sec_since_boot
+if __name__ != '__main__':
+  from common.realtime import sec_since_boot
+  from selfdrive.swaglog import cloudlog
+  from selfdrive.controls.lib.radar_helpers import _LEAD_ACCEL_TAU
+  from common.params import Params
 from common.numpy_fast import clip, interp
-from selfdrive.swaglog import cloudlog
 from selfdrive.modeld.constants import index_function
-from selfdrive.controls.lib.radar_helpers import _LEAD_ACCEL_TAU
 from common.conversions import Conversions as CV
 
 if __name__ == '__main__':  # generating code
@@ -16,7 +18,6 @@ else:
 
 from casadi import SX, vertcat
 
-from common.params import Params
 from decimal import Decimal
 
 MODEL_NAME = 'long'

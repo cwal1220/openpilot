@@ -81,5 +81,10 @@ models/*.thneed
 *.bz2
 
 build/
+k230_sysroot/
+
+rednose/helpers/ekf_sym_pyx.cpp
+third_party/acados/riscv64/lib/*.so*
+third_party/nncase_k230/
 
 !**/.gitkeep

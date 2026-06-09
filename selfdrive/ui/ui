@@ -1,8 +1,14 @@
 #!/bin/sh
 cd "$(dirname "$0")"
-export LD_LIBRARY_PATH="/system/lib64:$LD_LIBRARY_PATH"
-if [ ! -f /TICI ]; then
+if [ "$(uname -m)" = "riscv64" ] || [ "${OPENPILOT_TARGET_ARCH:-}" = "riscv64" ]; then
+  export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
+  export QT_PLUGIN_PATH="${QT_PLUGIN_PATH:-/usr/lib/riscv64-linux-gnu/qt5/plugins}"
+  export LD_LIBRARY_PATH="../..:../../cereal:../common:../../third_party/acados/riscv64/lib:$LD_LIBRARY_PATH"
+else
+  export LD_LIBRARY_PATH="/system/lib64:$LD_LIBRARY_PATH"
+fi
+if [ ! -f /TICI ] && [ "$(uname -m)" != "riscv64" ] && [ "${OPENPILOT_TARGET_ARCH:-}" != "riscv64" ]; then
   export LD_LIBRARY_PATH="/data/openpilot/third_party/mapbox-gl-native-qt/aarch64:$LD_LIBRARY_PATH"
 fi
-export QT_PLUGIN_PATH="../../third_party/qt-plugins/$(uname -m)"
+export QT_PLUGIN_PATH="${QT_PLUGIN_PATH:-../../third_party/qt-plugins/$(uname -m)}"
 exec ./_ui

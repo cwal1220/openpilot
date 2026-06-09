@@ -18,7 +18,7 @@ EnableExternalNavi = Params().get("OPKRNaviSelect", encoding="utf8") == "4" or P
 procs = [
   DaemonProcess("manage_athenad", "selfdrive.athena.manage_athenad", "AthenadPid"),
   # due to qualcomm kernel bugs SIGKILLing camerad sometimes causes page table corruption
-  NativeProcess("camerad", "selfdrive/camerad", ["./camerad"], unkillable=True, driverview=True),
+  NativeProcess("camerad", "selfdrive/camerad", ["./camerad"], unkillable=os.getenv("OPENPILOT_TARGET_ARCH") != "riscv64", driverview=True),
   NativeProcess("clocksd", "selfdrive/clocksd", ["./clocksd"]),
   NativeProcess("dmonitoringmodeld", "selfdrive/modeld", ["./dmonitoringmodeld"], enabled=(not PC or WEBCAM), driverview=True),
   NativeProcess("logcatd", "selfdrive/logcatd", ["./logcatd"]),

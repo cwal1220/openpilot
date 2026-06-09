@@ -103,7 +103,10 @@ def to_c_uint32(x):
 
 
 def get_key_header(name):
-  from Crypto.PublicKey import RSA
+  try:
+    from Crypto.PublicKey import RSA
+  except ModuleNotFoundError:
+    from Cryptodome.PublicKey import RSA
 
   public_fn = File(f'../certs/{name}.pub').srcnode().abspath
   rsa = RSA.importKey(open(public_fn).read())

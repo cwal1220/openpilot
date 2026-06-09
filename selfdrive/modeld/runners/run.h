@@ -3,7 +3,9 @@
 #include "runmodel.h"
 #include "snpemodel.h"
 
-#if defined(USE_THNEED)
+#if defined(USE_K230_KMODEL)
+#include "k230model.h"
+#elif defined(USE_THNEED)
 #include "thneedmodel.h"
 #elif defined(USE_ONNX_MODEL)
 #include "onnxmodel.h"

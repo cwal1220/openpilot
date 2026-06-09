@@ -1,3 +1,5 @@
+import os
+import shutil
 import re
 import SCons
 from SCons.Action import Action
@@ -54,8 +56,8 @@ def cython_suffix_emitter(env, source):
   return "$CYTHONCFILESUFFIX"
 
 def generate(env):
-  env["CYTHON"] = "cythonize"
-  env["CYTHONCOM"] = "$CYTHON $CYTHONFLAGS $SOURCE"
+  env["CYTHON"] = os.environ.get("CYTHON", "cythonize" if shutil.which("cythonize") else "cython")
+  env["CYTHONCOM"] = "$CYTHON --cplus $CYTHONFLAGS $SOURCE"
   env["CYTHONCFILESUFFIX"] = ".cpp"
 
   c_file, _ = SCons.Tool.createCFileBuilders(env)

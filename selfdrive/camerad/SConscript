@@ -2,12 +2,21 @@ Import('env', 'arch', 'cereal', 'messaging', 'common', 'gpucommon', 'visionipc',
 
 libs = ['m', 'pthread', common, 'jpeg', 'OpenCL', 'yuv', cereal, messaging, 'zmq', 'capnp', 'kj', visionipc, gpucommon]
 
-if arch == "aarch64":
+if arch == "riscv64":
+  env = env.Clone()
+  env.Append(CXXFLAGS = ['-DK230', '-Wno-error=multichar'])
+  env.Append(CPPPATH = ['#/third_party/k230_v4l2_drm/include'])
+  libs = ['m', 'pthread', common, cereal, messaging, 'zmq', 'capnp', 'kj', visionipc, 'OpenCL', 'v4l2-drm', 'display', 'drm']
+  cameras = ['cameras/camera_k230.cc']
+  common_sources = []
+elif arch == "aarch64":
   libs += ['gsl', 'CB', 'adreno_utils', 'EGL', 'GLESv3', 'cutils', 'ui']
   cameras = ['cameras/camera_qcom.cc']
+  common_sources = ['cameras/camera_common.cc', 'transforms/rgb_to_yuv.cc', 'imgproc/utils.cc']
 elif arch == "larch64":
   libs += ['atomic']
   cameras = ['cameras/camera_qcom2.cc']
+  common_sources = ['cameras/camera_common.cc', 'transforms/rgb_to_yuv.cc', 'imgproc/utils.cc']
 else:
   env['CXXFLAGS'] += ["-Wno-deprecated-declarations"]
   if USE_WEBCAM:
@@ -30,12 +39,11 @@ else:
     del libs[libs.index(gpucommon)][gpucommon.index('GL')]
     env = env.Clone()
     env['FRAMEWORKS'] = ['OpenCL', 'OpenGL']
+  common_sources = ['cameras/camera_common.cc', 'transforms/rgb_to_yuv.cc', 'imgproc/utils.cc']
 
 env.Program('camerad', [
     'main.cc',
-    'cameras/camera_common.cc',
-    'transforms/rgb_to_yuv.cc',
-    'imgproc/utils.cc',
+    common_sources,
     cameras,
   ], LIBS=libs)
 

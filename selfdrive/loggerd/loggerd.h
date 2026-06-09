@@ -59,8 +59,8 @@ struct LogCameraInfo {
 const LogCameraInfo cameras_logged[] = {
   {
     .type = RoadCam,
-    .stream_type = VISION_STREAM_ROAD,
     .filename = "fcamera.hevc",
+    .stream_type = VISION_STREAM_ROAD,
     .fps = MAIN_FPS,
     .bitrate = MAIN_BITRATE,
     .is_h265 = true,
@@ -72,8 +72,8 @@ const LogCameraInfo cameras_logged[] = {
   },
   {
     .type = DriverCam,
-    .stream_type = VISION_STREAM_DRIVER,
     .filename = "dcamera.hevc",
+    .stream_type = VISION_STREAM_DRIVER,
     .fps = MAIN_FPS, // on EONs, more compressed this way
     .bitrate = DCAM_BITRATE,
     .is_h265 = true,
@@ -85,8 +85,8 @@ const LogCameraInfo cameras_logged[] = {
   },
   {
     .type = WideRoadCam,
-    .stream_type = VISION_STREAM_WIDE_ROAD,
     .filename = "ecamera.hevc",
+    .stream_type = VISION_STREAM_WIDE_ROAD,
     .fps = MAIN_FPS,
     .bitrate = MAIN_BITRATE,
     .is_h265 = true,
@@ -99,12 +99,12 @@ const LogCameraInfo cameras_logged[] = {
 };
 const LogCameraInfo qcam_info = {
   .filename = "qcamera.ts",
+  .frame_width = Hardware::TICI() ? 526 : 480,
+  .frame_height = Hardware::TICI() ? 330 : 360, // keep pixel count the same?
   .fps = MAIN_FPS,
   .bitrate = 256000,
   .is_h265 = false,
   .downscale = true,
-  .frame_width = Hardware::TICI() ? 526 : 480,
-  .frame_height = Hardware::TICI() ? 330 : 360 // keep pixel count the same?
 };
 
 struct LoggerdState {

@@ -5,6 +5,7 @@
 #include "selfdrive/common/statlog.h"
 #include "selfdrive/common/util.h"
 
+#include <cstdarg>
 #include <stdio.h>
 #include <mutex>
 #include <zmq.h>

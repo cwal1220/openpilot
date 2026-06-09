@@ -1,3 +1,5 @@
+import os
+
 Import('env', 'envCython', 'arch', 'common')
 
 gen = "c_generated_code"
@@ -60,13 +62,30 @@ source_list = ['long_mpc.py',
   f'{acados_dir}/larch64/lib/libacados.so',
   f'{acados_templates_dir}/acados_solver.in.c',
 ]
+if arch == "riscv64":
+  source_list.append(f'{acados_dir}/riscv64/lib/libacados.so')
 
 lenv = env.Clone()
+cpp_only_warnings = [
+  "-Wno-unknown-warning-option",
+  "-Wno-deprecated-register",
+  "-Wno-register",
+  "-Wno-inconsistent-missing-override",
+  "-Wno-c99-designator",
+  "-Wno-reorder-init-list",
+]
+lenv["CCFLAGS"] = [flag for flag in lenv["CCFLAGS"] if flag not in cpp_only_warnings]
 lenv.Clean(generated_files, Dir(gen))
 
-lenv.Command(generated_files,
-             source_list,
-             f"cd {Dir('.').abspath} && python3 long_mpc.py")
+use_pregenerated_acados = os.environ.get("OPENPILOT_USE_PREGENERATED_ACADOS", "0") == "1"
+missing_generated_files = [f for f in generated_files if not os.path.exists(File(f).abspath)]
+if use_pregenerated_acados:
+  if missing_generated_files:
+    raise RuntimeError("OPENPILOT_USE_PREGENERATED_ACADOS=1 but generated longitudinal MPC files are missing")
+else:
+  lenv.Command(generated_files,
+               source_list,
+               f"cd {Dir('.').abspath} && python3 long_mpc.py")
 
 lenv["CFLAGS"].append("-DACADOS_WITH_QPOASES")
 lenv["CXXFLAGS"].append("-DACADOS_WITH_QPOASES")
@@ -84,13 +103,15 @@ libacados_ocp_solver_pxd = File(f'{gen}/acados_solver.pxd')
 libacados_ocp_solver_c = File(f'{gen}/acados_ocp_solver_pyx.c')
 
 lenv2 = envCython.Clone()
-lenv2["LINKFLAGS"] += [lib_solver[0].get_labspath()]
+lenv2["CCFLAGS"] = [flag for flag in lenv2["CCFLAGS"] if flag not in cpp_only_warnings]
 lenv2.Command(libacados_ocp_solver_c,
   [acados_ocp_solver_pyx, acados_ocp_solver_common, libacados_ocp_solver_pxd],
-  f'cython' + \
+  f'$CYTHON' + \
   f' -o {libacados_ocp_solver_c.get_labspath()}' + \
   f' -I {libacados_ocp_solver_pxd.get_dir().get_labspath()}' + \
   f' -I {acados_ocp_solver_common.get_dir().get_labspath()}' + \
   f' {acados_ocp_solver_pyx.get_labspath()}')
-lib_cython = lenv2.Program(f'{gen}/acados_ocp_solver_pyx.so', [libacados_ocp_solver_c])
+lib_cython = lenv2.Program(f'{gen}/acados_ocp_solver_pyx.so',
+                           [libacados_ocp_solver_c, lib_solver[0]],
+                           LIBS=['acados', 'hpipm', 'blasfeo', 'qpOASES_e'] + lenv2["LIBS"])
 lenv2.Depends(lib_cython, lib_solver)

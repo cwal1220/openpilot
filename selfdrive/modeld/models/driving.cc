@@ -4,13 +4,14 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include <eigen3/Eigen/Dense>
 
 #include "selfdrive/common/clutil.h"
 #include "selfdrive/common/params.h"
-#include "selfdrive/common/timing.h"
 
 constexpr float FCW_THRESHOLD_5MS2_HIGH = 0.15;
 constexpr float FCW_THRESHOLD_5MS2_LOW = 0.05;
@@ -32,6 +33,13 @@ void model_init(ModelState* s, cl_device_id device_id, cl_context context) {
 
 #ifdef USE_THNEED
   s->m = std::make_unique<ThneedModel>("models/supercombo.thneed",
+#elif USE_K230_KMODEL
+  const char *basedir = std::getenv("BASEDIR");
+  const std::string model_path = basedir != nullptr && basedir[0] != '\0' ?
+                                 std::string(basedir) + "/selfdrive/modeld/models/supercombo.kmodel" :
+                                 (access("models/supercombo.kmodel", R_OK) == 0 ? "models/supercombo.kmodel" :
+                                  "selfdrive/modeld/models/supercombo.kmodel");
+  s->m = std::make_unique<K230Model>(model_path.c_str(),
 #elif USE_ONNX_MODEL
   s->m = std::make_unique<ONNXModel>("models/supercombo.onnx",
 #else
@@ -73,13 +81,17 @@ ModelOutput* model_eval_frame(ModelState* s, VisionBuf* buf, VisionBuf* wbuf,
 
   // if getInputBuf is not NULL, net_input_buf will be
   auto input_buf = static_cast<cl_mem*>(s->m->getInputBuf());
-  auto net_input_buf = s->frame->prepare(buf->buf_cl, buf->width, buf->height, transform, input_buf);
+  auto net_input_buf = s->frame->prepare(buf, transform, input_buf);
   s->m->addImage(net_input_buf, s->frame->buf_size);
 
+#ifdef USE_K230_KMODEL
+  s->m->addExtra(nullptr, s->wide_frame->buf_size);
+#else
   if (wbuf != nullptr) {
-    auto net_extra_buf = s->wide_frame->prepare(wbuf->buf_cl, wbuf->width, wbuf->height, transform_wide, static_cast<cl_mem*>(s->m->getExtraBuf()));
+    auto net_extra_buf = s->wide_frame->prepare(wbuf, transform_wide, static_cast<cl_mem*>(s->m->getExtraBuf()));
     s->m->addExtra(net_extra_buf, s->wide_frame->buf_size);
   }
+#endif
   if (input_buf != nullptr) {
     s->frame->finish();
     if (wbuf != nullptr) {
@@ -89,6 +101,14 @@ ModelOutput* model_eval_frame(ModelState* s, VisionBuf* buf, VisionBuf* wbuf,
   s->m->execute();
 
   return (ModelOutput*)&s->output;
+}
+
+void model_reset_recurrent(ModelState* s) {
+#ifdef TEMPORAL
+  std::memset(&s->output[OUTPUT_SIZE], 0, TEMPORAL_SIZE * sizeof(float));
+#else
+  (void)s;
+#endif
 }
 
 void model_free(ModelState* s) {

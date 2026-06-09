@@ -48,7 +48,7 @@ class Pc(HardwareBase):
     }
 
   def get_network_strength(self, network_type):
-    return NetworkStrength.unknown
+    return NetworkStrength.unknown, "", ""
 
   def get_battery_capacity(self):
     return 100
@@ -106,3 +106,6 @@ class Pc(HardwareBase):
 
   def get_networks(self):
     return None
+
+  def get_ip_address(self):
+    return "--"

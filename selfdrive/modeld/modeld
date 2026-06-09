@@ -1,9 +1,11 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 cd $DIR
 
-if [ -d /system ]; then
+if [ "$(uname -m)" = "riscv64" ] || [ "${OPENPILOT_TARGET_ARCH:-}" = "riscv64" ]; then
+  export LD_LIBRARY_PATH="$DIR/../../third_party/acados/riscv64/lib:$DIR/../../cereal:$DIR/../../selfdrive/common:$LD_LIBRARY_PATH"
+elif [ -d /system ]; then
   if [ -f /TICI ]; then # QCOM2
     export LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/data/pythonpath/third_party/snpe/larch64:$LD_LIBRARY_PATH"
   else # QCOM

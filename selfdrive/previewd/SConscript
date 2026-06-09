@@ -1,0 +1,9 @@
+Import('env', 'arch', 'cereal', 'messaging', 'common')
+
+if arch == "riscv64":
+  env = env.Clone()
+  env.Append(CXXFLAGS = ['-DK230', '-Wno-error=multichar'])
+  env.Append(CPPPATH = ['#/third_party/k230_v4l2_drm/include'])
+  env.Program('previewd', [
+      'previewd.cc',
+    ], LIBS=['m', 'pthread', common, cereal, messaging, 'zmq', 'capnp', 'kj', 'v4l2-drm', 'display', 'drm'])

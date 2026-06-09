@@ -12,11 +12,10 @@ from selfdrive.modeld.constants import index_function
 from common.conversions import Conversions as CV
 
 if __name__ == '__main__':  # generating code
+  from casadi import SX, vertcat
   from pyextra.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 else:
   from selfdrive.controls.lib.longitudinal_mpc_lib.c_generated_code.acados_ocp_solver_pyx import AcadosOcpSolverCython  # pylint: disable=no-name-in-module, import-error
-
-from casadi import SX, vertcat
 
 from decimal import Decimal
 

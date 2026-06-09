@@ -15,6 +15,7 @@ rsync_args=(
   --stats
   --progress
   --delete
+  --exclude=/.git
   --exclude=/.git/
   --exclude=/.sconsign.dblite
   --exclude=/k230_sysroot/
@@ -27,4 +28,4 @@ rsync_args=(
 
 rsync "${rsync_args[@]}" -e "$RSYNC_RSH" "$ROOT/" "$BOARD:$DEST/"
 
-"${SSH[@]}" "$BOARD" "chmod +x '$DEST'/scripts/k230_*.sh"
+"${SSH[@]}" "$BOARD" "rm -rf '$DEST'/.git && chmod +x '$DEST'/scripts/k230_*.sh"

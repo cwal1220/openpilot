@@ -33,8 +33,8 @@ for target, (command, combined_lib, extra_generated) in found.items():
 libkf = env.SharedLibrary(f'{generated_folder}/libkf', lib_target)
 
 lenv = envCython.Clone()
-lenv["LINKFLAGS"] += [libkf[0].get_labspath()]
-lenv["LIBS"] = [common, 'json11', 'zmq'] + lenv["LIBS"]
+lenv["LIBPATH"] += [libkf[0].get_dir()]
+lenv["LIBS"] = [common, 'json11', 'zmq', 'kf'] + lenv["LIBS"]
 ekf_sym_so = lenv.Program('#rednose/helpers/ekf_sym_pyx.so', [ekf_sym_pyx, ekf_sym_cc, common_ekf])
 lenv.Depends(ekf_sym_so, libkf)
 

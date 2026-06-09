@@ -2,9 +2,8 @@
 import os
 import numpy as np
 
-from casadi import SX, vertcat, sin, cos
-
 if __name__ == '__main__':
+  from casadi import SX, vertcat, sin, cos
   N = 16
 else:
   from common.realtime import sec_since_boot

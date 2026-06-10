@@ -1,6 +1,29 @@
-Import('env')
+Import('env', 'arch')
 
 env.Library('json11', ['json11/json11.cpp'])
 env.Append(CPPPATH=[Dir('json11')])
 
 env.Library('kaitai', ['kaitai/kaitaistream.cpp'], CPPDEFINES=['KS_STR_ENCODING_NONE'])
+
+if arch == "riscv64":
+  k230_v4l2_drm_env = env.Clone()
+  k230_v4l2_drm_env.Append(
+    CPPPATH=['#/third_party/k230_v4l2_drm/include', '#/third_party/k230_v4l2_drm/src'],
+    CCFLAGS=[
+      '-Wno-error=shadow',
+      '-Wno-error=unused-variable',
+      '-Wno-error=unused-but-set-variable',
+      '-Wno-error=unused-function',
+    ],
+  )
+  k230_display = k230_v4l2_drm_env.SharedLibrary(
+    '#/third_party/k230_v4l2_drm/display',
+    ['k230_v4l2_drm/src/display.c'],
+    LIBS=['drm'],
+  )
+
+  k230_v4l2_drm_env.Prepend(LIBPATH=['#/third_party/k230_v4l2_drm'])
+  k230_v4l2_drm = k230_v4l2_drm_env.SharedLibrary(
+    '#/third_party/k230_v4l2_drm/v4l2-drm',
+    ['k230_v4l2_drm/src/lib.c'],
+  )

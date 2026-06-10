@@ -36,7 +36,6 @@ private:
 
   float *image_input_buf_ = nullptr;
   int image_buf_size_ = 0;
-  float *extra_input_buf_ = nullptr;
   int extra_buf_size_ = 0;
   bool extra_input_zeroed_ = false;
   float *desire_input_buf_ = nullptr;

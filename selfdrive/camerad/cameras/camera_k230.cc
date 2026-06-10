@@ -1,18 +1,15 @@
 #include "selfdrive/camerad/cameras/camera_common.h"
 
-#include <fcntl.h>
 #include <linux/videodev2.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
 
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
-#include <string>
 
 #include "cereal/messaging/messaging.h"
+#include "selfdrive/common/k230_vvcam.h"
 #include "selfdrive/common/swaglog.h"
 #include "selfdrive/common/timing.h"
 #include "selfdrive/common/util.h"
@@ -27,13 +24,12 @@ constexpr unsigned K230_DEFAULT_WIDTH = 512;
 constexpr unsigned K230_DEFAULT_HEIGHT = 256;
 constexpr unsigned K230_DEFAULT_SENSOR_WIDTH = 1920;
 constexpr unsigned K230_DEFAULT_SENSOR_HEIGHT = 1080;
-constexpr int K230_DEFAULT_DEVICE = 2;
 constexpr int K230_DEFAULT_TIMEOUT_MS = 1000;
 constexpr int K230_DEFAULT_VIPC_BUFFERS = 40;
 constexpr int K230_DEFAULT_V4L2_BUFFERS = 5;
 
 struct K230CameraConfig {
-  int device = K230_DEFAULT_DEVICE;
+  int device = -1;
   unsigned width = K230_DEFAULT_WIDTH;
   unsigned height = K230_DEFAULT_HEIGHT;
   unsigned crop_x = 0;
@@ -45,47 +41,17 @@ struct K230CameraConfig {
   int v4l2_buffers = K230_DEFAULT_V4L2_BUFFERS;
 };
 
-int parse_video_device(const std::string &value) {
-  if (value.empty()) return K230_DEFAULT_DEVICE;
-
-  const std::string prefix = "/dev/video";
-  const std::string digits = value.rfind(prefix, 0) == 0 ? value.substr(prefix.size()) : value;
-  char *end = nullptr;
-  long device = std::strtol(digits.c_str(), &end, 10);
-  if (end == digits.c_str() || *end != '\0' || device < 0 || device > 63) {
-    throw std::runtime_error("bad K230_CAM_DEVICE: " + value);
-  }
-  return static_cast<int>(device);
-}
-
-int detect_vvcam_video00() {
-  for (int i = 0; i < 20; ++i) {
-    const std::string dev_path = util::string_format("/dev/video%d", i);
-    int fd = HANDLE_EINTR(open(dev_path.c_str(), O_RDONLY | O_CLOEXEC));
-    if (fd < 0) continue;
-
-    v4l2_capability cap = {};
-    const int ret = HANDLE_EINTR(ioctl(fd, VIDIOC_QUERYCAP, &cap));
-    close(fd);
-    if (ret != 0) continue;
-
-    if (std::strcmp(reinterpret_cast<const char *>(cap.card), "vvcam-video.0.0") == 0) {
-      return i;
-    }
-  }
-  return -1;
-}
-
 K230CameraConfig read_config() {
   K230CameraConfig cfg = {};
 
-  const std::string env_device = util::getenv("K230_CAM_DEVICE");
-  if (!env_device.empty()) {
-    cfg.device = parse_video_device(env_device);
-  } else {
-    const int video00 = detect_vvcam_video00();
-    cfg.device = video00 >= 0 ? video00 + 1 : K230_DEFAULT_DEVICE;
+  if (!k230_vvcam::wait_for_ready()) {
+    throw std::runtime_error("K230 vvcam daemon/video nodes not ready");
   }
+  const int video00 = k230_vvcam::detect_vvcam_video00();
+  if (video00 < 0) {
+    throw std::runtime_error("K230 vvcam-video.0.0 not found");
+  }
+  cfg.device = video00 + 1;
 
   if ((cfg.width & 1) || (cfg.height & 1) || (cfg.crop_width & 1) || (cfg.crop_height & 1)) {
     throw std::runtime_error("K230 camera dimensions must be even");
@@ -119,11 +85,9 @@ public:
   explicit K230V4l2DrmCapture(const K230CameraConfig &cfg) {
     v4l2_drm_default_context(&ctx);
     ctx.device = cfg.device;
-    ctx.display = false;
     ctx.width = cfg.width;
     ctx.height = cfg.height;
     ctx.video_format = V4L2_PIX_FMT_NV12;
-    ctx.crop_size.crop_en = 1;
     ctx.crop_size.offset_x = cfg.crop_x;
     ctx.crop_size.offset_y = cfg.crop_y;
     ctx.crop_size.width = cfg.crop_width;
@@ -133,7 +97,12 @@ public:
     LOGW("K230 camerad opening /dev/video%d %ux%u NV12 crop=%ux%u+%u+%u",
          cfg.device, cfg.width, cfg.height, cfg.crop_width, cfg.crop_height, cfg.crop_x, cfg.crop_y);
 
-    if (v4l2_drm_setup(&ctx, 1, nullptr) != 0) {
+    k230_vvcam::SetupLock setup_lock;
+    if (!setup_lock.locked()) {
+      LOGW("K230 camerad could not lock vvcam setup");
+    }
+
+    if (v4l2_drm_setup(&ctx, 1) != 0) {
       throw std::runtime_error(util::string_format("v4l2_drm_setup failed for /dev/video%d errno=%d (%s)",
                                                    cfg.device, errno, std::strerror(errno)));
     }

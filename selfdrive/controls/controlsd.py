@@ -44,9 +44,12 @@ STEER_ANGLE_SATURATION_THRESHOLD = 2.5  # Degrees
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
 NOSENSOR = "NOSENSOR" in os.environ
+BLOCKED_PROCESSES = {p for p in os.getenv("BLOCK", "").split(",") if p}
+if os.getenv("NOBOARD") is not None:
+  BLOCKED_PROCESSES.add("pandad")
 IGNORE_PROCESSES = {"rtshield", "uploader", "deleter", "loggerd", "logmessaged", "tombstoned",
                     "logcatd", "proclogd", "clocksd", "updated", "timezoned", "manage_athenad", "statsd", "shutdownd", 'liveNaviData', 'liveENaviData', 'liveMapData'} | \
-                    {k for k, v in managed_processes.items() if not v.enabled}
+                    {k for k, v in managed_processes.items() if not v.enabled} | BLOCKED_PROCESSES
 
 ACTUATOR_FIELDS = set(car.CarControl.Actuators.schema.fields.keys())
 

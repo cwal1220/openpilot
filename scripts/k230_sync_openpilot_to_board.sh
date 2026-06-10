@@ -21,6 +21,7 @@ rsync_args=(
   --exclude=/k230_sysroot/
   --exclude=*.a
   --exclude=*.o
+  --exclude=*.os
   --exclude=/tools/k230/
 )
 

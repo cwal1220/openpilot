@@ -1,7 +1,4 @@
-#include <fcntl.h>
 #include <linux/videodev2.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <array>
@@ -10,14 +7,15 @@
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
-#include <string>
 #include <vector>
 
 #include "cereal/messaging/messaging.h"
+#include "selfdrive/common/k230_vvcam.h"
 #include "selfdrive/common/modeldata.h"
 #include "selfdrive/common/swaglog.h"
 #include "selfdrive/common/util.h"
 
+#include "display.h"
 #include "v4l2-drm.h"
 
 ExitHandler do_exit;
@@ -26,7 +24,6 @@ namespace {
 
 constexpr unsigned K230_SENSOR_WIDTH = 1920;
 constexpr unsigned K230_SENSOR_HEIGHT = 1080;
-constexpr int K230_DEFAULT_PREVIEW_DEVICE = 1;
 constexpr int K230_DEFAULT_V4L2_BUFFERS = 5;
 constexpr int K230_OVERLAY_VERTICES = TRAJECTORY_SIZE * 2;
 
@@ -34,9 +31,11 @@ constexpr float K230_OV5647_FX = 1625.7416788144435f;
 constexpr float K230_OV5647_FY = 1585.9830269782024f;
 constexpr float K230_OV5647_CX = 946.13450988811394f;
 constexpr float K230_OV5647_CY = 537.34063862123787f;
+constexpr int K230_PREVIEW_RETRY_MS = 300;
+constexpr uint32_t K230_PREVIEW_TIMEOUTS_BEFORE_RESTART = 3;
 
 struct K230PreviewConfig {
-  int device = K230_DEFAULT_PREVIEW_DEVICE;
+  int device = -1;
   unsigned width = 0;
   unsigned height = 0;
   int v4l2_buffers = K230_DEFAULT_V4L2_BUFFERS;
@@ -75,22 +74,6 @@ K230Mat3 matmul3(const K230Mat3 &a, const K230Mat3 &b) {
   return out;
 }
 
-K230Point rotate_overlay_point(float x, float y, unsigned logical_width, unsigned logical_height,
-                               unsigned overlay_width, unsigned overlay_height,
-                               enum drm_rotation rotation) {
-  (void)logical_width;
-  if (rotation == rotation_90) {
-    return {static_cast<float>(logical_height) - y, x};
-  } else if (rotation == rotation_180) {
-    return {static_cast<float>(logical_width) - x,
-            static_cast<float>(logical_height) - y};
-  } else if (rotation == rotation_270) {
-    return {y, static_cast<float>(logical_width) - x};
-  }
-  return {std::clamp(x, 0.0f, static_cast<float>(overlay_width)),
-          std::clamp(y, 0.0f, static_cast<float>(overlay_height))};
-}
-
 K230Mat3 view_from_calib_from_rpy(float roll, float pitch, float yaw) {
   const float cr = std::cos(roll), sr = std::sin(roll);
   const float cp = std::cos(pitch), sp = std::sin(pitch);
@@ -111,67 +94,89 @@ K230Mat3 view_from_calib_from_rpy(float roll, float pitch, float yaw) {
   return matmul3(view_from_device, matmul3(rot_z, matmul3(rot_y, rot_x)));
 }
 
-int detect_vvcam_video00() {
-  for (int i = 0; i < 20; ++i) {
-    const std::string dev_path = util::string_format("/dev/video%d", i);
-    int fd = HANDLE_EINTR(open(dev_path.c_str(), O_RDONLY | O_CLOEXEC));
-    if (fd < 0) continue;
-
-    v4l2_capability cap = {};
-    const int ret = HANDLE_EINTR(ioctl(fd, VIDIOC_QUERYCAP, &cap));
-    close(fd);
-    if (ret != 0) continue;
-
-    if (std::strcmp(reinterpret_cast<const char *>(cap.card), "vvcam-video.0.0") == 0) {
-      return i;
-    }
-  }
-  return -1;
-}
-
 K230PreviewConfig read_config() {
   K230PreviewConfig cfg = {};
-  const int video00 = detect_vvcam_video00();
-  cfg.device = video00 >= 0 ? video00 : K230_DEFAULT_PREVIEW_DEVICE;
+  if (!k230_vvcam::wait_for_ready()) {
+    throw std::runtime_error("K230 vvcam daemon/video nodes not ready");
+  }
+  const int video00 = k230_vvcam::detect_vvcam_video00();
+  if (video00 < 0) {
+    throw std::runtime_error("K230 vvcam-video.0.0 not found");
+  }
+  cfg.device = video00;
   return cfg;
 }
 
-class K230PreviewRuntime;
-K230PreviewRuntime *preview_runtime = nullptr;
-
 class K230PreviewRuntime {
 public:
-  K230PreviewRuntime(const K230PreviewConfig &init_cfg, struct display *init_display, enum drm_rotation init_rotation)
-      : cfg(init_cfg), display(init_display), rotation(init_rotation), sm({"modelV2", "liveCalibration"}) {
+  K230PreviewRuntime(const K230PreviewConfig &init_cfg, struct display *init_display)
+      : cfg(init_cfg), display(init_display), sm({"modelV2", "liveCalibration"}) {
     view_from_calib = view_from_calib_from_rpy(0.0f, 0.0f, 0.0f);
   }
 
   int run() {
-    v4l2_drm_default_context(&ctx);
-    ctx.device = cfg.device;
-    ctx.display = true;
-    ctx.width = cfg.width;
-    ctx.height = cfg.height;
-    ctx.video_format = V4L2_PIX_FMT_NV12;
-    ctx.display_format = 0;
-    ctx.drm_rotation = rotation;
-    ctx.buffer_num = static_cast<unsigned>(cfg.v4l2_buffers);
+    setup_preview_capture();
+    if (do_exit) return 0;
 
-    LOGW("K230 previewd opening /dev/video%d %ux%u NV12 rotation=%d",
-         cfg.device, cfg.width, cfg.height, rotation);
-
-    if (v4l2_drm_setup(&ctx, 1, &display) != 0) {
-      throw std::runtime_error(util::string_format("v4l2_drm_setup preview failed for /dev/video%d errno=%d (%s)",
-                                                   cfg.device, errno, std::strerror(errno)));
-    }
-    setup = true;
-
+    setup_video_buffers();
     setup_overlay();
 
-    preview_runtime = this;
-    const int ret = v4l2_drm_run(&ctx, 1, &K230PreviewRuntime::handle_frame);
-    preview_runtime = nullptr;
-    return ret;
+    if (display_update_buffer(video_buffers[0], 0, 0) != 0) {
+      LOGE("K230 previewd initial video update failed");
+    }
+    if (overlay_buffer != nullptr && display_update_buffer(overlay_buffer, 0, 0) != 0) {
+      LOGE("K230 previewd initial overlay update failed");
+    }
+    if (display_commit(display) == 0) {
+      display_wait_vsync(display);
+    }
+
+    uint32_t capture_timeouts = 0;
+    while (!do_exit) {
+      if (v4l2_drm_dump(&ctx, 1000) != 0) {
+        const int err = errno;
+        if (err == EINTR) {
+          continue;
+        }
+        if (err == EAGAIN || err == ETIMEDOUT) {
+          ++capture_timeouts;
+          if (capture_timeouts == 1 || capture_timeouts >= K230_PREVIEW_TIMEOUTS_BEFORE_RESTART) {
+            LOGE("K230 previewd capture timeout on /dev/video%d, consecutive=%u", cfg.device, capture_timeouts);
+          }
+          if (capture_timeouts >= K230_PREVIEW_TIMEOUTS_BEFORE_RESTART) {
+            if (!restart_preview_capture(err)) {
+              break;
+            }
+            capture_timeouts = 0;
+          }
+          continue;
+        }
+        LOGE("K230 previewd capture failed errno=%d (%s), restarting /dev/video%d",
+             err, std::strerror(err), cfg.device);
+        if (!restart_preview_capture(err)) {
+          break;
+        }
+        capture_timeouts = 0;
+        continue;
+      }
+      capture_timeouts = 0;
+
+      auto *src = static_cast<const uint8_t *>(ctx.buffers[ctx.vbuffer.index].mmap);
+      video_buffer_index = (video_buffer_index + 1) % video_buffers.size();
+      rotate_nv12_90(src, video_buffers[video_buffer_index]);
+      v4l2_drm_dump_release(&ctx);
+
+      update_overlay();
+      if (display_update_buffer(video_buffers[video_buffer_index], 0, 0) != 0) {
+        LOGE("K230 previewd video update failed");
+      }
+      if (display_commit(display) == 0) {
+        display_wait_vsync(display);
+      } else {
+        LOGE("K230 previewd display commit failed");
+      }
+    }
+    return 0;
   }
 
   ~K230PreviewRuntime() {
@@ -187,6 +192,14 @@ public:
       display_free_plane(overlay_plane);
       overlay_plane = nullptr;
     }
+    for (display_buffer *buffer : video_buffers) {
+      display_free_buffer(buffer);
+    }
+    video_buffers.clear();
+    if (video_plane != nullptr) {
+      display_free_plane(video_plane);
+      video_plane = nullptr;
+    }
     if (display != nullptr) {
       display_exit(display);
       display = nullptr;
@@ -194,9 +207,100 @@ public:
   }
 
 private:
-  static int handle_frame(struct v4l2_drm_context *ctx, bool displayed) {
-    (void)ctx;
-    return preview_runtime != nullptr ? preview_runtime->on_frame(displayed) : 0;
+  void setup_preview_capture() {
+    v4l2_drm_default_context(&ctx);
+    ctx.device = cfg.device;
+    ctx.width = cfg.width;
+    ctx.height = cfg.height;
+    ctx.video_format = V4L2_PIX_FMT_NV12;
+    ctx.buffer_num = static_cast<unsigned>(cfg.v4l2_buffers);
+
+    LOGW("K230 previewd opening /dev/video%d %ux%u NV12 cpu-rotate-to %ux%u",
+         cfg.device, cfg.width, cfg.height, display->width, display->height);
+
+    {
+      k230_vvcam::SetupLock setup_lock;
+      if (!setup_lock.locked()) {
+        LOGW("K230 previewd could not lock vvcam setup");
+      }
+
+      if (v4l2_drm_setup(&ctx, 1) != 0) {
+        throw std::runtime_error(util::string_format("v4l2_drm_setup preview capture failed for /dev/video%d errno=%d (%s)",
+                                                     cfg.device, errno, std::strerror(errno)));
+      }
+    }
+    setup = true;
+    if (v4l2_drm_start(&ctx) != 0) {
+      const int start_errno = errno;
+      v4l2_drm_stop(&ctx);
+      setup = false;
+      errno = start_errno;
+      throw std::runtime_error(util::string_format("v4l2_drm_start preview capture failed for /dev/video%d errno=%d (%s)",
+                                                   cfg.device, errno, std::strerror(errno)));
+    }
+  }
+
+  bool restart_preview_capture(int err) {
+    LOGE("K230 previewd restarting /dev/video%d capture after errno=%d (%s)",
+         cfg.device, err, std::strerror(err));
+    if (setup) {
+      v4l2_drm_stop(&ctx);
+      setup = false;
+    }
+    util::sleep_for(K230_PREVIEW_RETRY_MS);
+
+    if (do_exit) return false;
+    setup_preview_capture();
+    return true;
+  }
+
+  void setup_video_buffers() {
+    video_plane = display_get_plane(display, DRM_FORMAT_NV12);
+    if (video_plane == nullptr) {
+      throw std::runtime_error("K230 previewd could not allocate NV12 video plane");
+    }
+
+    for (int i = 0; i < 3; ++i) {
+      display_buffer *buffer = display_allocate_buffer(video_plane, display->width, display->height);
+      if (buffer == nullptr) {
+        throw std::runtime_error("K230 previewd could not allocate NV12 display buffer");
+      }
+      const size_t y_size = static_cast<size_t>(buffer->stride) * buffer->height;
+      std::memset(buffer->map, 16, y_size);
+      std::memset(static_cast<uint8_t *>(buffer->map) + y_size, 128, buffer->size - y_size);
+      video_buffers.push_back(buffer);
+    }
+  }
+
+  void rotate_nv12_90(const uint8_t *src, display_buffer *dst) {
+    const int src_w = static_cast<int>(cfg.width);
+    const int src_h = static_cast<int>(cfg.height);
+    const int dst_h = static_cast<int>(dst->height);
+    auto *dst_y = static_cast<uint8_t *>(dst->map);
+    auto *dst_uv = dst_y + dst->stride * dst_h;
+    const uint8_t *src_y = src;
+    const uint8_t *src_uv = src + src_w * src_h;
+
+    for (int y = 0; y < src_h; ++y) {
+      for (int x = 0; x < src_w; ++x) {
+        const int dx = src_h - 1 - y;
+        const int dy = x;
+        dst_y[dy * dst->stride + dx] = src_y[y * src_w + x];
+      }
+    }
+
+    const int src_ch = src_h / 2;
+    const int src_cw = src_w / 2;
+    for (int cy = 0; cy < src_ch; ++cy) {
+      for (int cx = 0; cx < src_cw; ++cx) {
+        const int dcx = src_ch - 1 - cy;
+        const int dcy = cx;
+        const uint8_t *s = src_uv + cy * src_w + cx * 2;
+        uint8_t *d = dst_uv + dcy * dst->stride + dcx * 2;
+        d[0] = s[0];
+        d[1] = s[1];
+      }
+    }
   }
 
   void setup_overlay() {
@@ -216,14 +320,6 @@ private:
 
     std::memset(overlay_buffer->map, 0, overlay_buffer->size);
     overlay_scratch.resize(overlay_buffer->size);
-    if (display_commit_buffer(overlay_buffer, 0, 0) != 0) {
-      LOGE("K230 previewd initial overlay commit failed");
-    }
-  }
-
-  int on_frame(bool displayed) {
-    update_overlay(displayed);
-    return do_exit ? 'q' : 0;
   }
 
   bool update_model_state() {
@@ -239,9 +335,9 @@ private:
     return changed;
   }
 
-  void update_overlay(bool displayed) {
+  void update_overlay() {
     const bool calib_changed = update_model_state();
-    if (!displayed || overlay_buffer == nullptr) return;
+    if (overlay_buffer == nullptr) return;
 
     const uint64_t model_frame = sm.rcv_frame("modelV2");
     if (!first_overlay && !calib_changed && model_frame == last_model_frame) {
@@ -291,7 +387,7 @@ private:
       return false;
     }
 
-    *out = rotate_overlay_point(px, py, cfg.width, cfg.height, overlay_buffer->width, overlay_buffer->height, rotation);
+    *out = {static_cast<float>(cfg.height) - py, px};
     return out->x >= -200.0f && out->x <= overlay_buffer->width + 200.0f &&
            out->y >= -200.0f && out->y <= overlay_buffer->height + 200.0f;
   }
@@ -390,14 +486,16 @@ private:
 
   K230PreviewConfig cfg;
   struct display *display = nullptr;
-  enum drm_rotation rotation = rotation_0;
   SubMaster sm;
   struct v4l2_drm_context ctx = {};
+  struct display_plane *video_plane = nullptr;
+  std::vector<display_buffer *> video_buffers;
   struct display_plane *overlay_plane = nullptr;
   struct display_buffer *overlay_buffer = nullptr;
   std::vector<uint8_t> overlay_scratch;
   K230Mat3 view_from_calib = {};
   uint64_t last_model_frame = 0;
+  size_t video_buffer_index = 0;
   bool setup = false;
   bool first_overlay = true;
 };
@@ -412,17 +510,13 @@ int main() {
       throw std::runtime_error("display_init failed for K230 previewd");
     }
 
-    enum drm_rotation rotation = rotation_0;
-    if (display->width < display->height) {
-      cfg.width = display->height;
-      cfg.height = display->width;
-      rotation = rotation_90;
-    } else {
-      cfg.width = display->width;
-      cfg.height = display->height;
+    if (display->width >= display->height) {
+      throw std::runtime_error("K230 previewd expects a portrait DRM mode");
     }
+    cfg.width = display->height;
+    cfg.height = display->width;
 
-    K230PreviewRuntime preview(cfg, display, rotation);
+    K230PreviewRuntime preview(cfg, display);
     return preview.run();
   } catch (const std::exception &e) {
     LOGE("K230 previewd error: %s", e.what());

@@ -2,6 +2,8 @@
 #include <sys/resource.h>
 
 #include <cmath>
+#include <cstdlib>
+#include <vector>
 
 #include "locationd.h"
 
@@ -502,7 +504,11 @@ int Localizer::locationd_thread() {
   const std::initializer_list<const char *> service_list =
       { "gpsLocationExternal", "sensorEvents", "cameraOdometry", "liveCalibration", "carState" };
   PubMaster pm({ "liveLocationKalman" });
-  SubMaster sm(service_list, nullptr, { "gpsLocationExternal" });
+  std::vector<const char *> ignore_alive = { "gpsLocationExternal" };
+  if (std::getenv("NOSENSOR")) {
+    ignore_alive.push_back("sensorEvents");
+  }
+  SubMaster sm(service_list, nullptr, ignore_alive);
 
   uint64_t cnt = 0;
   bool filterInitialized = false;

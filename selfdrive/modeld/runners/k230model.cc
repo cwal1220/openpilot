@@ -183,21 +183,16 @@ void K230Model::addImage(float *image_buf, int buf_size) {
   image_buf_size_ = buf_size;
 }
 
-void K230Model::addExtra(float *image_buf, int buf_size) {
-  extra_input_buf_ = image_buf;
-  extra_buf_size_ = buf_size;
-  if (image_buf != nullptr) {
+void K230Model::addExtra(float *, int buf_size) {
+  if (extra_buf_size_ != buf_size) {
     extra_input_zeroed_ = false;
   }
+  extra_buf_size_ = buf_size;
 }
 
 void K230Model::execute() {
   write_input(0, image_input_buf_, image_buf_size_, "input_imgs");
-  if (extra_input_buf_ != nullptr) {
-    write_input(1, extra_input_buf_, extra_buf_size_, "big_input_imgs");
-  } else {
-    write_zero_input_once(1, extra_buf_size_, "big_input_imgs", extra_input_zeroed_);
-  }
+  write_zero_input_once(1, extra_buf_size_, "big_input_imgs", extra_input_zeroed_);
   write_input(2, desire_input_buf_, desire_state_size_, "desire");
   write_input(3, traffic_convention_input_buf_, traffic_convention_size_, "traffic_convention");
   sanitize_recurrent("input");

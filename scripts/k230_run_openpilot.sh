@@ -18,7 +18,7 @@ export QT_PLUGIN_PATH="${QT_PLUGIN_PATH:-/usr/lib/riscv64-linux-gnu/qt5/plugins}
 export QT_OPENGL="${QT_OPENGL:-software}"
 export QT_QUICK_BACKEND="${QT_QUICK_BACKEND:-software}"
 export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
-export LD_LIBRARY_PATH="$ROOT/cereal:$ROOT/opendbc/can:$ROOT/selfdrive/common:$ROOT/common/transformations:$ROOT/rednose/helpers:$ROOT/selfdrive/locationd/models/generated:$ROOT/third_party/acados/riscv64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$ROOT/third_party/k230_v4l2_drm:$ROOT/cereal:$ROOT/opendbc/can:$ROOT/selfdrive/common:$ROOT/common/transformations:$ROOT/rednose/helpers:$ROOT/selfdrive/locationd/models/generated:$ROOT/third_party/acados/riscv64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 mkdir -p /data/log /data/params /data/media /dev/shm
 ln -sfn "$ROOT" /data/openpilot

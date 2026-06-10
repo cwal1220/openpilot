@@ -14,15 +14,6 @@ extern "C" {
 #define MAX_PROPS 128
 #define DISPLAY_QUEUE_DEPTH 3
 
-enum drm_rotation {
-  rotation_0 = 0,
-  rotation_90 = 1,
-  rotation_180 = 2,
-  rotation_270 = 3,
-  rotation_reflect_x = 4,
-  rotation_reflect_y = 5,
-};
-
 struct display {
   int fd;
   uint32_t conn_id, enc_id, crtc_id, blob_id;
@@ -39,7 +30,6 @@ struct display {
   drmModeAtomicReqPtr req;
   uint32_t commitFlags;
   drmEventContext drm_event_ctx;
-  enum drm_rotation drm_rotation;
   struct display_plane *planes;
 };
 
@@ -51,7 +41,6 @@ struct display_buffer {
   uint32_t size;
   int dmabuf_fd;
   uint32_t id;
-  enum drm_rotation drm_rotation;
   void *map;
 };
 
@@ -64,7 +53,6 @@ struct display_plane {
   uint32_t plane_id;
   unsigned int fourcc;
   bool first;
-  enum drm_rotation drm_rotation;
   struct display_buffer *buffers;
 };
 
@@ -74,11 +62,9 @@ struct display_plane *display_get_plane(struct display *display, unsigned int fo
 void display_free_plane(struct display_plane *plane);
 struct display_buffer *display_allocate_buffer(struct display_plane *plane, uint32_t width, uint32_t height);
 void display_free_buffer(struct display_buffer *buffer);
-int display_commit_buffer(const struct display_buffer *buffer, uint32_t x, uint32_t y);
 int display_update_buffer(struct display_buffer *buffer, uint32_t x, uint32_t y);
 int display_commit(struct display *display);
 void display_wait_vsync(struct display *display);
-void display_handle_vsync(struct display *display);
 
 #ifdef __cplusplus
 }

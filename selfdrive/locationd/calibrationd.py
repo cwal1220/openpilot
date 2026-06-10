@@ -12,8 +12,8 @@ import capnp
 import numpy as np
 from typing import List, NoReturn, Optional
 
-from cereal import log
 import cereal.messaging as messaging
+from cereal.messaging import log_from_bytes
 from common.conversions import Conversions as CV
 from common.params import Params, put_nonblocking
 from common.realtime import set_realtime_priority
@@ -72,7 +72,7 @@ class Calibrator:
 
     if param_put and calibration_params:
       try:
-        msg = log.Event.from_bytes(calibration_params)
+        msg = log_from_bytes(calibration_params)
         rpy_init = np.array(msg.liveCalibration.rpyCalib)
         valid_blocks = msg.liveCalibration.validBlocks
       except Exception:

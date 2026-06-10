@@ -4,6 +4,11 @@ if arch == "riscv64":
   env = env.Clone()
   env.Append(CXXFLAGS = ['-DK230', '-Wno-error=multichar'])
   env.Append(CPPPATH = ['#/third_party/k230_v4l2_drm/include'])
-  env.Program('previewd', [
+  env.Prepend(LIBPATH = ['#/third_party/k230_v4l2_drm'])
+  previewd = env.Program('previewd', [
       'previewd.cc',
     ], LIBS=['m', 'pthread', common, cereal, messaging, 'zmq', 'capnp', 'kj', 'v4l2-drm', 'display', 'drm'])
+  env.Depends(previewd, [
+    '#/third_party/k230_v4l2_drm/libv4l2-drm.so',
+    '#/third_party/k230_v4l2_drm/libdisplay.so',
+  ])

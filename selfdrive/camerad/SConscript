@@ -6,7 +6,8 @@ if arch == "riscv64":
   env = env.Clone()
   env.Append(CXXFLAGS = ['-DK230', '-Wno-error=multichar'])
   env.Append(CPPPATH = ['#/third_party/k230_v4l2_drm/include'])
-  libs = ['m', 'pthread', common, cereal, messaging, 'zmq', 'capnp', 'kj', visionipc, 'OpenCL', 'v4l2-drm', 'display', 'drm']
+  env.Prepend(LIBPATH = ['#/third_party/k230_v4l2_drm'])
+  libs = ['m', 'pthread', common, cereal, messaging, 'zmq', 'capnp', 'kj', visionipc, 'OpenCL', 'v4l2-drm']
   cameras = ['cameras/camera_k230.cc']
   common_sources = []
 elif arch == "aarch64":
@@ -41,11 +42,16 @@ else:
     env['FRAMEWORKS'] = ['OpenCL', 'OpenGL']
   common_sources = ['cameras/camera_common.cc', 'transforms/rgb_to_yuv.cc', 'imgproc/utils.cc']
 
-env.Program('camerad', [
+camerad = env.Program('camerad', [
     'main.cc',
     common_sources,
     cameras,
   ], LIBS=libs)
+
+if arch == "riscv64":
+  env.Depends(camerad, [
+    '#/third_party/k230_v4l2_drm/libv4l2-drm.so',
+  ])
 
 if GetOption("test"):
   env.Program('test/ae_gray_test', [

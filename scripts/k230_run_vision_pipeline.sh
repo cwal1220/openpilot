@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT="${K230_OPENPILOT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
 
-DEFAULT_BLOCK="ui,soundd,manage_athenad,pandad,clocksd,dmonitoringmodeld,logcatd,proclogd,sensord,ubloxd,locationd,calibrationd,controlsd,dmonitoringd,paramsd,plannerd,radard"
+DEFAULT_BLOCK="ui,soundd,dmonitoringmodeld,dmonitoringd,sensord"
 export BLOCK="${BLOCK:-$DEFAULT_BLOCK}"
-export NOBOARD="${NOBOARD:-1}"
-export PASSIVE="${PASSIVE:-1}"
+export PASSIVE="${PASSIVE:-0}"
+export NOSENSOR="${NOSENSOR:-1}"
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 
 set_openpilot_view() {

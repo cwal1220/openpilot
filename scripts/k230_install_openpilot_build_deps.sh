@@ -44,6 +44,7 @@ apt-get install -y --no-install-recommends \
   pkg-config \
   python3-cffi \
   python3-dev \
+  python3-flask \
   python3-numpy \
   python3-pip \
   python3-pycryptodome \
@@ -74,3 +75,4 @@ pkg-config --exists Qt5Core
 pkg-config --exists Qt5Location
 pkg-config --exists OpenCL
 python3 -c 'import capnp'
+python3 -c 'import flask'

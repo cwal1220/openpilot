@@ -14,6 +14,7 @@ EnableMapbox = Params().get_bool('MapboxEnabled')
 EnableShutdownD = Params().get_bool('C2WithCommaPower')
 EnableRTShield = Params().get_bool('RTShield')
 EnableExternalNavi = Params().get("OPKRNaviSelect", encoding="utf8") == "4" or Params().get("OPKRNaviSelect", encoding="utf8") == "5"
+EnableWebUI = os.getenv("K230_WEBUI", "1" if os.getenv("OPENPILOT_TARGET_ARCH") == "riscv64" else "0") != "0"
 
 procs = [
   DaemonProcess("manage_athenad", "selfdrive.athena.manage_athenad", "AthenadPid"),
@@ -44,6 +45,7 @@ procs = [
   PythonProcess("radard", "selfdrive.controls.radard"),
   PythonProcess("thermald", "selfdrive.thermald.thermald", persistent=True),
   PythonProcess("timezoned", "selfdrive.timezoned", enabled=TICI, persistent=True),
+  PythonProcess("webuid", "selfdrive.webui.webuid", enabled=EnableWebUI, persistent=True),
   #PythonProcess("tombstoned", "selfdrive.tombstoned", enabled=not PC, persistent=True),
   #PythonProcess("updated", "selfdrive.updated", enabled=not PC, persistent=True),
   #PythonProcess("uploader", "selfdrive.loggerd.uploader", persistent=True),

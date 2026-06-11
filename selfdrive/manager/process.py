@@ -21,6 +21,7 @@ from cereal import log
 
 WATCHDOG_FN = "/dev/shm/wd_"
 ENABLE_WATCHDOG = os.getenv("NO_WATCHDOG") is None
+K230_RESTART_BACKOFF = os.getenv("OPENPILOT_TARGET_ARCH") == "riscv64"
 
 
 def launcher(proc: str, name: str) -> None:
@@ -79,6 +80,9 @@ class ManagerProcess(ABC):
   watchdog_max_dt = None
   watchdog_seen = False
   shutting_down = False
+  start_time = 0.
+  next_start_time = 0.
+  restart_delay = 0.
 
   @abstractmethod
   def prepare(self) -> None:
@@ -170,6 +174,20 @@ class ManagerProcess(ABC):
     cloudlog.info(f"sending signal {sig} to {self.name}")
     os.kill(self.proc.pid, sig)
 
+  def clear_dead_proc(self) -> bool:
+    if self.proc is not None and self.proc.exitcode is not None:
+      if time.monotonic() - self.start_time > 60.:
+        self.restart_delay = 0.
+      self.restart_delay = min(max(self.restart_delay * 2, 1.), 30.)
+      self.next_start_time = time.monotonic() + self.restart_delay
+      cloudlog.warning(f"{self.name} exited with {self.proc.exitcode}, restarting in {self.restart_delay:.1f}s")
+      self.shutting_down = False
+      self.proc = None
+    wait = self.next_start_time - time.monotonic()
+    if wait > 0:
+      return False
+    return True
+
   def get_process_state_msg(self):
     state = log.ManagerState.ProcessState.new_message()
     state.name = self.name
@@ -200,6 +218,8 @@ class NativeProcess(ManagerProcess):
     # In case we only tried a non blocking stop we need to stop it before restarting
     if self.shutting_down:
       self.stop()
+    if K230_RESTART_BACKOFF and not self.clear_dead_proc():
+      return
 
     if self.proc is not None:
       return
@@ -208,6 +228,7 @@ class NativeProcess(ManagerProcess):
     cloudlog.info(f"starting process {self.name}")
     self.proc = Process(name=self.name, target=nativelauncher, args=(self.cmdline, cwd, self.name))
     self.proc.start()
+    self.start_time = time.monotonic()
     self.watchdog_seen = False
     self.shutting_down = False
 
@@ -232,6 +253,8 @@ class PythonProcess(ManagerProcess):
     # In case we only tried a non blocking stop we need to stop it before restarting
     if self.shutting_down:
       self.stop()
+    if K230_RESTART_BACKOFF and not self.clear_dead_proc():
+      return
 
     if self.proc is not None:
       return
@@ -239,6 +262,7 @@ class PythonProcess(ManagerProcess):
     cloudlog.info(f"starting python {self.module}")
     self.proc = Process(name=self.name, target=launcher, args=(self.module, self.name))
     self.proc.start()
+    self.start_time = time.monotonic()
     self.watchdog_seen = False
     self.shutting_down = False
 
@@ -303,4 +327,3 @@ def ensure_running(procs: ValuesView[ManagerProcess], started: bool, driverview:
       p.stop(block=False)
 
     p.check_watchdog(started)
-

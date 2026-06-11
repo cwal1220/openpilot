@@ -8,6 +8,7 @@
 #include <xf86drmMode.h>
 #include <xf86drm.h>
 #include <drm_fourcc.h>
+#include <drm/drm_mode.h>
 #include <errno.h>
 #include <string.h>
 #include <stdbool.h>
@@ -19,6 +20,24 @@
 static void page_flip_handler(int fd, unsigned int sequence, unsigned int tv_sec,
                   unsigned int tv_usec, void *user_data) {
 }
+
+#ifdef __riscv
+static inline void thead_csi_dcache_clean_invalid_range(void* addr, uint64_t size) {
+    uint64_t op_addr = (uint64_t)addr;
+    int64_t op_size = size + op_addr % 64;
+    const int64_t linesize = 64;
+
+    __asm volatile("fence iorw, iorw");
+    while (op_size > 0) {
+        __asm volatile(".insn i 0x0b, 0, x0, %0, 0x027" : : "r"(op_addr));
+        op_addr += linesize;
+        op_size -= linesize;
+    }
+    __asm volatile("fence iorw, iorw");
+    __asm volatile("fence.i");
+    __asm volatile("fence r, r");
+}
+#endif
 
 void display_exit(struct display* display) {
     struct display_plane* p = display->planes;
@@ -45,6 +64,7 @@ struct display* display_init(unsigned device) {
     display->planes = NULL;
     display->commitFlags = 0;
     display->req = NULL;
+    display->drm_rotation = rotation_0;
 
     snprintf(filename, sizeof(filename), "/dev/dri/card%u", device);
     display->fd = open(filename, O_RDWR | O_CLOEXEC);
@@ -293,6 +313,7 @@ found_plane:
     display_plane->plane_id = plane->plane_id;
     display_plane->plane = plane;
     display_plane->buffers = NULL;
+    display_plane->drm_rotation = display->drm_rotation;
     display_plane->next = display->planes;
     display->planes = display_plane;
     display_plane->first = true;
@@ -370,6 +391,7 @@ struct display_buffer* display_allocate_buffer(struct display_plane* plane, uint
     buffer->height = height;
     buffer->size = creq.size;
     buffer->dmabuf_fd = prime.fd;
+    buffer->drm_rotation = plane->drm_rotation;
     buffer->map = map;
     buffer->plane = plane;
     buffer->next = plane->buffers;
@@ -438,6 +460,15 @@ static uint32_t get_plane_property_id(const struct display_plane* plane, const c
     }
     pr("plane prop %s not found", name);
     return 0xDEADDEAD;
+}
+
+static bool plane_has_property(const struct display_plane* plane, const char* name) {
+    for (unsigned i = 0; i < plane->props_count; i++) {
+        if (strcmp(name, plane->props[i]->name) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static uint32_t get_crtc_property_id(const struct display* display, const char* name) {
@@ -514,10 +545,47 @@ static int drm_add_conn_property(const struct display* display, drmModeAtomicReq
     return 0;
 }
 
+static uint64_t drm_rotation_property_value(enum drm_rotation rotation) {
+    switch (rotation) {
+        case rotation_0:
+            return DRM_MODE_ROTATE_0;
+        case rotation_90:
+            return DRM_MODE_ROTATE_90;
+        case rotation_180:
+            return DRM_MODE_ROTATE_180;
+        case rotation_270:
+            return DRM_MODE_ROTATE_270;
+        case rotation_reflect_x:
+            return DRM_MODE_ROTATE_0 | DRM_MODE_REFLECT_X;
+        case rotation_reflect_y:
+            return DRM_MODE_ROTATE_0 | DRM_MODE_REFLECT_Y;
+        default:
+            return DRM_MODE_ROTATE_0;
+    }
+}
+
+static bool drm_rotation_swaps_size(enum drm_rotation rotation) {
+    return rotation == rotation_90 || rotation == rotation_270;
+}
+
 int display_update_buffer(struct display_buffer* buffer, uint32_t x, uint32_t y) {
     struct display_plane* plane = buffer->plane;
     struct display* display = plane->display;
     display->commitFlags |= DRM_MODE_PAGE_FLIP_EVENT;
+    const bool rotated = buffer->drm_rotation != rotation_0 &&
+                         buffer->drm_rotation != rotation_reflect_x &&
+                         buffer->drm_rotation != rotation_reflect_y;
+
+    if (rotated && !plane_has_property(plane, "rotation")) {
+        pr("plane %u does not support rotation", plane->plane_id);
+        return -1;
+    }
+
+#ifdef __riscv
+    if (buffer->map != NULL && buffer->size > 0) {
+        thead_csi_dcache_clean_invalid_range(buffer->map, buffer->size);
+    }
+#endif
 
     if (display->req == NULL) {
         display->req = drmModeAtomicAlloc();
@@ -539,8 +607,17 @@ int display_update_buffer(struct display_buffer* buffer, uint32_t x, uint32_t y)
     drm_add_plane_property(plane, display->req, "SRC_H", buffer->height << 16);
     drm_add_plane_property(plane, display->req, "CRTC_X", x);
     drm_add_plane_property(plane, display->req, "CRTC_Y", y);
-    drm_add_plane_property(plane, display->req, "CRTC_W", buffer->width);
-    drm_add_plane_property(plane, display->req, "CRTC_H", buffer->height);
+    if (drm_rotation_swaps_size(buffer->drm_rotation)) {
+        drm_add_plane_property(plane, display->req, "CRTC_W", buffer->height);
+        drm_add_plane_property(plane, display->req, "CRTC_H", buffer->width);
+    } else {
+        drm_add_plane_property(plane, display->req, "CRTC_W", buffer->width);
+        drm_add_plane_property(plane, display->req, "CRTC_H", buffer->height);
+    }
+    if (plane_has_property(plane, "rotation")) {
+        drm_add_plane_property(plane, display->req, "rotation",
+                               drm_rotation_property_value(buffer->drm_rotation));
+    }
 
     return 0;
 }

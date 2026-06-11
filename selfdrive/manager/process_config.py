@@ -6,6 +6,7 @@ from selfdrive.manager.process import PythonProcess, NativeProcess, DaemonProces
 from common.params import Params
 
 WEBCAM = os.getenv("USE_WEBCAM") is not None
+K230 = os.getenv("OPENPILOT_TARGET_ARCH") == "riscv64" or os.uname().machine == "riscv64"
 
 EnableLogger = Params().get_bool('OpkrEnableLogger')
 EnableUploader = Params().get_bool('OpkrEnableUploader')
@@ -14,19 +15,20 @@ EnableMapbox = Params().get_bool('MapboxEnabled')
 EnableShutdownD = Params().get_bool('C2WithCommaPower')
 EnableRTShield = Params().get_bool('RTShield')
 EnableExternalNavi = Params().get("OPKRNaviSelect", encoding="utf8") == "4" or Params().get("OPKRNaviSelect", encoding="utf8") == "5"
-EnableWebUI = os.getenv("K230_WEBUI", "1" if os.getenv("OPENPILOT_TARGET_ARCH") == "riscv64" else "0") != "0"
+EnableDriverMonitoring = not K230 and (not PC or WEBCAM)
+EnableWebUI = os.getenv("K230_WEBUI", "1" if K230 else "0") != "0"
 
 procs = [
   DaemonProcess("manage_athenad", "selfdrive.athena.manage_athenad", "AthenadPid"),
   # due to qualcomm kernel bugs SIGKILLing camerad sometimes causes page table corruption
-  NativeProcess("camerad", "selfdrive/camerad", ["./camerad"], unkillable=os.getenv("OPENPILOT_TARGET_ARCH") != "riscv64", driverview=True),
+  NativeProcess("camerad", "selfdrive/camerad", ["./camerad"], unkillable=not K230, driverview=True),
   NativeProcess("clocksd", "selfdrive/clocksd", ["./clocksd"]),
-  NativeProcess("dmonitoringmodeld", "selfdrive/modeld", ["./dmonitoringmodeld"], enabled=(not PC or WEBCAM), driverview=True),
+  NativeProcess("dmonitoringmodeld", "selfdrive/modeld", ["./dmonitoringmodeld"], enabled=EnableDriverMonitoring, driverview=True),
   NativeProcess("logcatd", "selfdrive/logcatd", ["./logcatd"]),
   #NativeProcess("loggerd", "selfdrive/loggerd", ["./loggerd"]),
   NativeProcess("modeld", "selfdrive/modeld", ["./modeld"]),
   #NativeProcess("navd", "selfdrive/ui/navd", ["./navd"], enabled=(PC or TICI or EON), persistent=True),
-  NativeProcess("previewd", "selfdrive/previewd", ["./previewd"], enabled=os.getenv("OPENPILOT_TARGET_ARCH") == "riscv64"),
+  NativeProcess("previewd", "selfdrive/previewd", ["./previewd"], enabled=K230),
   NativeProcess("proclogd", "selfdrive/proclogd", ["./proclogd"]),
   NativeProcess("sensord", "selfdrive/sensord", ["./sensord"], enabled=not PC, persistent=EON, sigkill=EON),
   NativeProcess("ubloxd", "selfdrive/locationd", ["./ubloxd"], enabled=(not PC or WEBCAM)),
@@ -37,7 +39,7 @@ procs = [
   PythonProcess("calibrationd", "selfdrive.locationd.calibrationd"),
   PythonProcess("controlsd", "selfdrive.controls.controlsd"),
   #PythonProcess("deleter", "selfdrive.loggerd.deleter", persistent=True),
-  PythonProcess("dmonitoringd", "selfdrive.monitoring.dmonitoringd", enabled=(not PC or WEBCAM), driverview=True),
+  PythonProcess("dmonitoringd", "selfdrive.monitoring.dmonitoringd", enabled=EnableDriverMonitoring, driverview=True),
   #PythonProcess("logmessaged", "selfdrive.logmessaged", persistent=True),
   PythonProcess("pandad", "selfdrive.boardd.pandad", persistent=True),
   PythonProcess("paramsd", "selfdrive.locationd.paramsd"),

@@ -44,6 +44,7 @@ STEER_ANGLE_SATURATION_THRESHOLD = 2.5  # Degrees
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
 NOSENSOR = "NOSENSOR" in os.environ
+K230 = os.getenv("OPENPILOT_TARGET_ARCH") == "riscv64" or os.uname().machine == "riscv64"
 BLOCKED_PROCESSES = {p for p in os.getenv("BLOCK", "").split(",") if p}
 if os.getenv("NOBOARD") is not None:
   BLOCKED_PROCESSES.add("pandad")
@@ -77,7 +78,8 @@ class Controls:
       self.pm = messaging.PubMaster(['sendcan', 'controlsState', 'carState',
                                      'carControl', 'carEvents', 'carParams'])
 
-    self.camera_packets = ["roadCameraState", "driverCameraState"]
+    self.has_driver_monitoring = not K230
+    self.camera_packets = ["roadCameraState"] if K230 else ["roadCameraState", "driverCameraState"]
     if TICI:
       self.camera_packets.append("wideRoadCameraState")
 
@@ -88,9 +90,12 @@ class Controls:
     self.sm = sm
     if self.sm is None:
       ignore = ['driverCameraState', 'managerState'] if SIMULATION else None
-      self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'liveCalibration',
-                                     'driverMonitoringState', 'longitudinalPlan', 'lateralPlan', 'liveLocationKalman',
-                                     'managerState', 'liveParameters', 'radarState', 'liveNaviData', 'liveENaviData', 'liveMapData'] + self.camera_packets + joystick_packet,
+      services = ['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'liveCalibration',
+                  'longitudinalPlan', 'lateralPlan', 'liveLocationKalman', 'managerState',
+                  'liveParameters', 'radarState', 'liveNaviData', 'liveENaviData', 'liveMapData']
+      if self.has_driver_monitoring:
+        services.append('driverMonitoringState')
+      self.sm = messaging.SubMaster(services + self.camera_packets + joystick_packet,
                                      ignore_alive=ignore, ignore_avg_freq=['radarState', 'longitudinalPlan'])
 
     self.can_sock = can_sock
@@ -290,7 +295,8 @@ class Controls:
       return
 
     self.events.add_from_msg(CS.events)
-    self.events.add_from_msg(self.sm['driverMonitoringState'].events)
+    if self.has_driver_monitoring:
+      self.events.add_from_msg(self.sm['driverMonitoringState'].events)
 
     # Create events for battery, temperature, disk space, and memory
     if EON and (self.sm['peripheralState'].pandaType != PandaType.uno) and \
@@ -1007,7 +1013,7 @@ class Controls:
         self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
         CC.actuatorsOutput = self.last_actuators
 
-    force_decel = (self.sm['driverMonitoringState'].awarenessStatus < 0.) or \
+    force_decel = (self.has_driver_monitoring and self.sm['driverMonitoringState'].awarenessStatus < 0.) or \
                   (self.state == State.softDisabling)
 
     # Curvature & Steering angle

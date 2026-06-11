@@ -133,10 +133,6 @@ K230_HEADLESS_PANEL_OVERRIDES = {
   "OpkrBatteryChargingMax": "Device",
   "OPKRServer": "Network",
   "OPKRServerAPI": "Network",
-  "OpkrMonitoringMode": "Driving",
-  "OpkrMonitorEyesThreshold": "Driving",
-  "OpkrMonitorNormalEyesThreshold": "Driving",
-  "OpkrMonitorBlinkThreshold": "Driving",
   "ShowStopLine": "Tuning",
 }
 K230_HEADLESS_HIDDEN_KEYS = {
@@ -155,6 +151,10 @@ K230_HEADLESS_HIDDEN_KEYS = {
   "OpkrDrivingRecord",
   "RecordingCount",
   "RecordingQuality",
+  "OpkrMonitoringMode",
+  "OpkrMonitorEyesThreshold",
+  "OpkrMonitorNormalEyesThreshold",
+  "OpkrMonitorBlinkThreshold",
   "AnimatedRPM",
   "AnimatedRPMMax",
   "HoldForSetting",
@@ -181,6 +181,8 @@ _SETTINGS: List[Setting] = [
   action("Device", "refresh", "Refresh", "Pulse OnRoadRefresh so openpilot reloads settings."),
   action("Device", "reboot", "Reboot", "Ask manager to reboot the device.", True, "REBOOT"),
   action("Device", "shutdown", "Power Off", "Ask manager to shut down the device.", True, "SHUTDOWN"),
+  Setting(panel="Device", key="K230PreviewHudMode", title="K230 Preview HUD", type="enum",
+          options=opt(("0", "Compact"), ("1", "Full"), ("2", "Minimal")), default="1"),
 
   ro("Network", "_ip_address", "IP Address"),
   b("Network", "SshEnabled", "Enable SSH"),
@@ -691,6 +693,12 @@ SETTING_DOCS: Dict[str, HelpDoc] = {
     "driver monitoring과 controlsd가 읽습니다. monitoring 파이프라인이 실행 중일 때 OPKR 졸음/운전자 모니터링 모드를 켭니다.",
     "0=standard monitoring behavior, 1=OPKR monitoring mode.",
     "0=기본 monitoring 동작, 1=OPKR monitoring mode.",
+  ),
+  "K230PreviewHudMode": doc(
+    "Read by K230 previewd about once per second. It changes only the LCD preview overlay density; camera capture, model input, model execution, controls, and WebUI settings are not changed.",
+    "K230 previewd가 약 1초마다 읽습니다. LCD preview overlay의 정보 밀도만 바꾸며 camera capture, model 입력, model 실행, controls, WebUI 설정값은 변경하지 않습니다.",
+    "0=Compact: speed/status plus essential lane, lead, CPU, calibration, and system state. 1=Full: all compact fields plus tuning/debug, TPMS/GPS, speed-limit/TR, and detailed planner values. 2=Minimal: camera overlay with only speed, set speed, gear, service status, alerts, and system safety bars.",
+    "0=간결: 속도/상태와 핵심 차선, 앞차, CPU, 캘리브레이션, 시스템 상태만 표시합니다. 1=전체: 간결 항목에 튜닝/디버그, TPMS/GPS, 제한속도/TR, planner 상세값까지 표시합니다. 2=최소: 카메라 overlay에 속도, 설정속도, 기어, 서비스 상태, 경고, 시스템 안전 바만 표시합니다.",
   ),
   "OpkrMonitorEyesThreshold": doc(
     "Read by driver_monitor as the eye-open threshold for OPKR monitoring mode.",
@@ -1957,6 +1965,10 @@ WEB_KO_TRANSLATIONS = {
   "Stale": "오래됨",
   "Apply K7 HEV Defaults": "K7 HEV 기본값 적용",
   "Set the project default K7 Hybrid car profile and restore core steering/live tuning defaults.": "K7 하이브리드 차량 프로필과 주요 조향/라이브 튜닝 기본값을 적용합니다.",
+  "K230 Preview HUD": "K230 프리뷰 HUD",
+  "Compact": "간결",
+  "Full": "전체",
+  "Minimal": "최소",
 }
 
 _KO_TRANSLATION_CACHE: Optional[Dict[str, str]] = None

@@ -45,7 +45,9 @@ class ET:
 EVENT_NAME = {v: k for k, v in EventName.schema.enumerants.items()}
 
 try:
-  LANG_FILE='/data/openpilot/selfdrive/assets/addon/lang/events/' + Params().get("LanguageSetting", encoding="utf8") + '.txt'
+  is_riscv64 = os.getenv("OPENPILOT_TARGET_ARCH") == "riscv64" or os.uname().machine == "riscv64"
+  lang = "main_en" if is_riscv64 else Params().get("LanguageSetting", encoding="utf8")
+  LANG_FILE='/data/openpilot/selfdrive/assets/addon/lang/events/' + lang + '.txt'
 except:
   LANG_FILE='/data/openpilot/selfdrive/assets/addon/lang/events/main_en.txt'
   pass

@@ -100,7 +100,7 @@ def fingerprint(logcan, sendcan):
 
     cached_params = Params().get("CarParamsCache")
     if cached_params is not None:
-      cached_params = car.CarParams.from_bytes(cached_params)
+      cached_params = messaging.capnp_from_bytes(car.CarParams, cached_params)
       if cached_params.carName == "mock":
         cached_params = None
 

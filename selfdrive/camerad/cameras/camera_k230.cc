@@ -21,7 +21,7 @@ ExitHandler do_exit;
 namespace {
 
 constexpr unsigned K230_DEFAULT_WIDTH = 512;
-constexpr unsigned K230_DEFAULT_HEIGHT = 256;
+constexpr unsigned K230_DEFAULT_HEIGHT = 288;
 constexpr unsigned K230_DEFAULT_SENSOR_WIDTH = 1920;
 constexpr unsigned K230_DEFAULT_SENSOR_HEIGHT = 1080;
 constexpr int K230_DEFAULT_TIMEOUT_MS = 1000;
@@ -34,8 +34,8 @@ struct K230CameraConfig {
   unsigned height = K230_DEFAULT_HEIGHT;
   unsigned crop_x = 0;
   unsigned crop_y = 0;
-  unsigned crop_width = K230_DEFAULT_SENSOR_WIDTH;
-  unsigned crop_height = K230_DEFAULT_SENSOR_HEIGHT;
+  unsigned crop_width = 0;
+  unsigned crop_height = 0;
   int timeout_ms = K230_DEFAULT_TIMEOUT_MS;
   int vipc_buffers = K230_DEFAULT_VIPC_BUFFERS;
   int v4l2_buffers = K230_DEFAULT_V4L2_BUFFERS;

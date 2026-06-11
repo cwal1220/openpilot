@@ -182,6 +182,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"Offroad_UpdateFailed", CLEAR_ON_MANAGER_START},
     {"GitCommitRemote", PERSISTENT},
     {"IsOpenpilotViewEnabled", CLEAR_ON_MANAGER_START},
+    {"K230PreviewHudMode", PERSISTENT},
     {"OpkrAutoShutdown", PERSISTENT},
     {"OpkrForceShutdown", PERSISTENT},
     {"OpkrForceShutdownTrigger", PERSISTENT},

@@ -4,7 +4,7 @@ from .messaging_pyx import MultiplePublishersError, MessagingError  # pylint: di
 import os
 import capnp
 
-from typing import Optional, List, Union
+from typing import Any, Optional, List, Union
 from collections import deque
 
 from cereal import log
@@ -28,12 +28,15 @@ except ImportError:
 context = Context()
 _capnp_contexts = deque(maxlen=4096)
 
-def log_from_bytes(dat: bytes) -> capnp.lib.capnp._DynamicStructReader:
-  msg = log.Event.from_bytes(dat, traversal_limit_in_words=NO_TRAVERSAL_LIMIT)
+def capnp_from_bytes(schema: Any, dat: bytes, **kwargs) -> capnp.lib.capnp._DynamicStructReader:
+  msg = schema.from_bytes(dat, **kwargs)
   if hasattr(msg, "__enter__"):
     _capnp_contexts.append(msg)
     msg = msg.__enter__()
   return msg
+
+def log_from_bytes(dat: bytes) -> capnp.lib.capnp._DynamicStructReader:
+  return capnp_from_bytes(log.Event, dat, traversal_limit_in_words=NO_TRAVERSAL_LIMIT)
 
 def new_message(service: Optional[str] = None, size: Optional[int] = None) -> capnp.lib.capnp._DynamicStructBuilder:
   dat = log.Event.new_message()

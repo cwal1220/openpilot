@@ -120,6 +120,9 @@ class TestWebUiRegistry(unittest.TestCase):
     language = next(s for s in data["settings"] if s["key"] == "LanguageSetting")
     self.assertEqual(language["title"], "언어 변경")
     self.assertEqual([option["value"] for option in language["options"]], ["main_en", "main_ko"])
+    hud = next(s for s in data["settings"] if s["key"] == "K230PreviewHudMode")
+    self.assertEqual(hud["title"], "K230 프리뷰 HUD")
+    self.assertEqual([option["label"] for option in hud["options"]], ["간결", "전체", "최소"])
 
   def test_unsupported_language_falls_back_to_english(self):
     data = schema("main_fr", FakeParams())

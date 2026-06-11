@@ -4,9 +4,11 @@
 #include <array>
 #include <cerrno>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "cereal/messaging/messaging.h"
@@ -60,6 +62,72 @@ struct K230Rect {
 
 struct K230Mat3 {
   float v[9] = {};
+};
+
+struct K230HudState {
+  bool enabled = false;
+  bool engageable = false;
+  bool active = false;
+  bool control_allowed = false;
+  bool brake_pressed = false;
+  bool brake_lights = false;
+  bool gas_pressed = false;
+  bool left_blinker = false;
+  bool right_blinker = false;
+  bool left_blindspot = false;
+  bool right_blindspot = false;
+  bool standstill = false;
+  bool brake_hold = false;
+  bool cruise_acc = false;
+  bool driver_acc = false;
+  bool laneless = false;
+  bool lead_status = false;
+  bool longitudinal_control = false;
+
+  float speed_kph = 0.0f;
+  float v_cruise = 0.0f;
+  float safety_speed = 0.0f;
+  float v_set_dis = 0.0f;
+  float steering_angle = 0.0f;
+  float desired_angle = 0.0f;
+  float accel = 0.0f;
+  float a_req = 0.0f;
+  float output_scale = 0.0f;
+  float lane_width = 0.0f;
+  float d_prob = 0.0f;
+  float l_prob = 0.0f;
+  float r_prob = 0.0f;
+  float steer_ratio = 0.0f;
+  float angle_offset_avg = 0.0f;
+  float stiffness_factor = 0.0f;
+  float cpu_usage = 0.0f;
+  float cpu_temp = 0.0f;
+  float memory_usage = 0.0f;
+  float lead_d = 0.0f;
+  float lead_v = 0.0f;
+  float steering_torque = 0.0f;
+  float engine_rpm = 0.0f;
+  float charge_meter = 0.0f;
+  float steer_actuator_delay = 0.0f;
+  float gps_accuracy = 0.0f;
+  float altitude = 0.0f;
+  float model_execution_ms = 0.0f;
+  float total_camera_offset = 0.0f;
+  float standstill_elapsed = 0.0f;
+  std::array<float, 4> lane_line_probs = {};
+  std::array<float, 2> road_edge_confs = {};
+  std::array<float, 4> tpms = {};
+
+  uint8_t cruise_gap = 0;
+  uint8_t lateral_control_method = 0;
+  int tpms_unit = 0;
+  int gear_step = 0;
+  int satellite_count = 0;
+  int alert_size = 0;
+  int gear = 0;
+  std::string alert_text1;
+  std::string alert_text2;
+  std::string alert_type;
 };
 
 uint32_t argb(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
@@ -117,7 +185,10 @@ K230PreviewConfig read_config() {
 class K230PreviewRuntime {
 public:
   K230PreviewRuntime(const K230PreviewConfig &init_cfg, struct display *init_display)
-      : cfg(init_cfg), display(init_display), sm({"modelV2", "liveCalibration"}) {
+      : cfg(init_cfg), display(init_display),
+        sm({"modelV2", "liveCalibration", "controlsState", "carState", "deviceState",
+            "lateralPlan", "liveParameters", "radarState", "pandaStates", "carParams",
+            "ubloxGnss", "gpsLocationExternal"}) {
     view_from_calib = view_from_calib_from_rpy(0.0f, 0.0f, 0.0f);
   }
 
@@ -350,7 +421,42 @@ private:
     overlay_buffer = overlay_buffers[0];
   }
 
-  bool update_model_state() {
+  float finite_or_zero(float value) const {
+    return std::isfinite(value) ? value : 0.0f;
+  }
+
+  template <typename List>
+  float average_list(const List &values) const {
+    float sum = 0.0f;
+    int count = 0;
+    for (auto value : values) {
+      const float v = static_cast<float>(value);
+      if (std::isfinite(v)) {
+        sum += v;
+        ++count;
+      }
+    }
+    return count > 0 ? sum / count : 0.0f;
+  }
+
+  std::string sanitize_text(const char *text, size_t max_len) const {
+    std::string out;
+    if (text == nullptr) return out;
+
+    for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text);
+         *p != '\0' && out.size() < max_len; ++p) {
+      char c = static_cast<char>(*p);
+      if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+      if (c >= 32 && c <= 126) {
+        out.push_back(c);
+      } else if (!out.empty() && out.back() != ' ') {
+        out.push_back(' ');
+      }
+    }
+    return out;
+  }
+
+  bool update_state() {
     bool changed = false;
     sm.update(0);
     if (sm.updated("liveCalibration")) {
@@ -360,15 +466,151 @@ private:
         changed = true;
       }
     }
+
+    if (sm.updated("controlsState")) {
+      auto cs = sm["controlsState"].getControlsState();
+      hud.enabled = cs.getEnabled();
+      hud.active = cs.getActive();
+      hud.engageable = cs.getEngageable();
+      hud.lateral_control_method = cs.getLateralControlMethod();
+      hud.v_cruise = finite_or_zero(cs.getVCruise());
+      hud.safety_speed = finite_or_zero(cs.getSafetySpeed());
+      hud.desired_angle = finite_or_zero(cs.getSteeringAngleDesiredDeg());
+      hud.accel = finite_or_zero(cs.getAccel());
+      hud.alert_size = static_cast<int>(cs.getAlertSize());
+      hud.alert_text1 = sanitize_text(cs.getAlertText1().cStr(), 32);
+      hud.alert_text2 = sanitize_text(cs.getAlertText2().cStr(), 32);
+      hud.alert_type = sanitize_text(cs.getAlertType().cStr(), 24);
+      changed = true;
+    }
+
+    if (sm.updated("carState")) {
+      auto car = sm["carState"].getCarState();
+      hud.speed_kph = std::max(0.0f, finite_or_zero(car.getVEgo() * 3.6f));
+      hud.v_set_dis = finite_or_zero(car.getVSetDis());
+      hud.cruise_gap = car.getCruiseGapSet();
+      hud.steering_angle = finite_or_zero(car.getSteeringAngleDeg());
+      hud.brake_pressed = car.getBrakePressed();
+      hud.brake_lights = car.getBrakeLights();
+      hud.gas_pressed = car.getGasPressed();
+      hud.left_blinker = car.getLeftBlinker();
+      hud.right_blinker = car.getRightBlinker();
+      hud.left_blindspot = car.getLeftBlindspot();
+      hud.right_blindspot = car.getRightBlindspot();
+      hud.standstill = car.getStandstill() || car.getStandStill();
+      hud.brake_hold = car.getBrakeHold() || car.getBrakeHoldActive();
+      hud.cruise_acc = car.getCruiseAccStatus();
+      hud.driver_acc = car.getDriverAcc();
+      hud.a_req = finite_or_zero(car.getAReqValue());
+      hud.gear = static_cast<int>(car.getGearShifter());
+      hud.steering_torque = finite_or_zero(car.getSteeringTorque());
+      hud.engine_rpm = finite_or_zero(car.getEngineRpm());
+      hud.gear_step = car.getGearStep();
+      hud.charge_meter = finite_or_zero(car.getChargeMeter());
+      hud.tpms_unit = car.getTpms().getUnit();
+      hud.tpms[0] = finite_or_zero(car.getTpms().getFl());
+      hud.tpms[1] = finite_or_zero(car.getTpms().getFr());
+      hud.tpms[2] = finite_or_zero(car.getTpms().getRl());
+      hud.tpms[3] = finite_or_zero(car.getTpms().getRr());
+      changed = true;
+    }
+
+    if (sm.updated("deviceState")) {
+      auto ds = sm["deviceState"].getDeviceState();
+      hud.cpu_usage = average_list(ds.getCpuUsagePercent());
+      hud.cpu_temp = average_list(ds.getCpuTempC());
+      hud.memory_usage = static_cast<float>(ds.getMemoryUsagePercent());
+      changed = true;
+    }
+
+    if (sm.updated("lateralPlan")) {
+      auto lp = sm["lateralPlan"].getLateralPlan();
+      hud.lane_width = finite_or_zero(lp.getLaneWidth());
+      hud.d_prob = finite_or_zero(lp.getDProb());
+      hud.l_prob = finite_or_zero(lp.getLProb());
+      hud.r_prob = finite_or_zero(lp.getRProb());
+      hud.output_scale = finite_or_zero(lp.getOutputScale());
+      hud.standstill_elapsed = finite_or_zero(lp.getStandstillElapsedTime());
+      hud.total_camera_offset = finite_or_zero(lp.getTotalCameraOffset());
+      hud.laneless = lp.getLanelessMode();
+      changed = true;
+    }
+
+    if (sm.updated("liveParameters")) {
+      auto lp = sm["liveParameters"].getLiveParameters();
+      hud.steer_ratio = finite_or_zero(lp.getSteerRatio());
+      hud.angle_offset_avg = finite_or_zero(lp.getAngleOffsetAverageDeg());
+      hud.stiffness_factor = finite_or_zero(lp.getStiffnessFactor());
+      changed = true;
+    }
+
+    if (sm.updated("radarState")) {
+      auto lead = sm["radarState"].getRadarState().getLeadOne();
+      hud.lead_status = lead.getStatus();
+      hud.lead_d = finite_or_zero(lead.getDRel());
+      hud.lead_v = finite_or_zero(lead.getVRel());
+      changed = true;
+    }
+
+    if (sm.updated("modelV2")) {
+      auto model = sm["modelV2"].getModelV2();
+      hud.model_execution_ms = finite_or_zero(model.getModelExecutionTime() * 1000.0f);
+
+      const auto lane_probs = model.getLaneLineProbs();
+      for (int i = 0; i < 4 && i < static_cast<int>(lane_probs.size()); ++i) {
+        hud.lane_line_probs[i] = finite_or_zero(lane_probs[i]);
+      }
+
+      const auto road_edge_stds = model.getRoadEdgeStds();
+      for (int i = 0; i < 2 && i < static_cast<int>(road_edge_stds.size()); ++i) {
+        hud.road_edge_confs[i] = std::clamp(1.0f - finite_or_zero(road_edge_stds[i]), 0.0f, 1.0f);
+      }
+      changed = true;
+    }
+
+    if (sm.updated("pandaStates")) {
+      auto panda_states = sm["pandaStates"].getPandaStates();
+      hud.control_allowed = false;
+      for (const auto &panda_state : panda_states) {
+        hud.control_allowed = hud.control_allowed || panda_state.getControlsAllowed();
+      }
+      changed = true;
+    }
+
+    if (sm.updated("carParams")) {
+      auto cp = sm["carParams"].getCarParams();
+      hud.longitudinal_control = cp.getOpenpilotLongitudinalControl();
+      hud.steer_actuator_delay = finite_or_zero(cp.getSteerActuatorDelay());
+      changed = true;
+    }
+
+    if (sm.updated("ubloxGnss")) {
+      auto ublox = sm["ubloxGnss"].getUbloxGnss();
+      if (ublox.which() == cereal::UbloxGnss::MEASUREMENT_REPORT) {
+        hud.satellite_count = ublox.getMeasurementReport().getNumMeas();
+        changed = true;
+      }
+    }
+
+    if (sm.updated("gpsLocationExternal")) {
+      auto gps = sm["gpsLocationExternal"].getGpsLocationExternal();
+      hud.gps_accuracy = finite_or_zero(gps.getAccuracy());
+      hud.altitude = finite_or_zero(static_cast<float>(gps.getAltitude()));
+      changed = true;
+    }
+
     return changed;
   }
 
   void update_overlay() {
-    const bool calib_changed = update_model_state();
+    const bool state_changed = update_state();
     if (overlay_buffers.empty()) return;
 
     const uint64_t model_frame = sm.rcv_frame("modelV2");
-    if (!first_overlay && !calib_changed && model_frame == last_model_frame) {
+    ++overlay_frame_counter;
+    pending_hud_update = pending_hud_update || state_changed;
+    const bool hud_redraw = pending_hud_update && (first_overlay || overlay_frame_counter % 3 == 0);
+    if (!first_overlay && !hud_redraw && model_frame == last_model_frame) {
       return;
     }
 
@@ -379,7 +621,9 @@ private:
     if (model_frame > 0) {
       draw_model(sm["modelV2"].getModelV2());
     }
+    draw_hud();
     overlay_dirty_rects[overlay_buffer_index] = current_overlay_dirty;
+    pending_hud_update = false;
     first_overlay = false;
     last_model_frame = model_frame;
 
@@ -505,6 +749,288 @@ private:
     }
   }
 
+  template <typename... Args>
+  std::string format_text(const char *fmt, Args... args) const {
+    char buffer[96];
+    std::snprintf(buffer, sizeof(buffer), fmt, args...);
+    return std::string(buffer);
+  }
+
+  std::array<uint8_t, 7> glyph_rows(char c) const {
+    switch (c) {
+      case '0': return {0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e};
+      case '1': return {0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e};
+      case '2': return {0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f};
+      case '3': return {0x1e, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x1e};
+      case '4': return {0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02};
+      case '5': return {0x1f, 0x10, 0x1e, 0x01, 0x01, 0x11, 0x0e};
+      case '6': return {0x06, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e};
+      case '7': return {0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08};
+      case '8': return {0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e};
+      case '9': return {0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c};
+      case 'A': return {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11};
+      case 'B': return {0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e};
+      case 'C': return {0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e};
+      case 'D': return {0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e};
+      case 'E': return {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f};
+      case 'F': return {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10};
+      case 'G': return {0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f};
+      case 'H': return {0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11};
+      case 'I': return {0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e};
+      case 'J': return {0x07, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0c};
+      case 'K': return {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11};
+      case 'L': return {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f};
+      case 'M': return {0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11};
+      case 'N': return {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11};
+      case 'O': return {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e};
+      case 'P': return {0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10};
+      case 'Q': return {0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d};
+      case 'R': return {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11};
+      case 'S': return {0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e};
+      case 'T': return {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
+      case 'U': return {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e};
+      case 'V': return {0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04};
+      case 'W': return {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a};
+      case 'X': return {0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11};
+      case 'Y': return {0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04};
+      case 'Z': return {0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f};
+      case '-': return {0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00};
+      case '.': return {0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c};
+      case ':': return {0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00};
+      case '/': return {0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10};
+      case '%': return {0x19, 0x1a, 0x02, 0x04, 0x08, 0x0b, 0x13};
+      case '<': return {0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02};
+      case '>': return {0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08};
+      case '!': return {0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04};
+      case '?': return {0x0e, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04};
+      case '+': return {0x00, 0x04, 0x04, 0x1f, 0x04, 0x04, 0x00};
+      case '=': return {0x00, 0x00, 0x1f, 0x00, 0x1f, 0x00, 0x00};
+      case '_': return {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f};
+      default: return {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    }
+  }
+
+  int text_width(const std::string &text, int scale) const {
+    return text.empty() ? 0 : static_cast<int>(text.size()) * 6 * scale - scale;
+  }
+
+  std::string clip_text_to_width(const std::string &text, int scale, int max_width) const {
+    if (max_width <= 0 || text_width(text, scale) <= max_width) return text;
+    std::string clipped = text;
+    while (!clipped.empty() && text_width(clipped, scale) > max_width) {
+      clipped.pop_back();
+    }
+    return clipped;
+  }
+
+  void fill_rect(int x, int y, int w, int h, uint32_t color, bool mark_dirty = true) {
+    if (overlay_buffer == nullptr || w <= 0 || h <= 0) return;
+
+    const int x0 = std::max(0, x);
+    const int y0 = std::max(0, y);
+    const int x1 = std::min(static_cast<int>(overlay_buffer->width) - 1, x + w - 1);
+    const int y1 = std::min(static_cast<int>(overlay_buffer->height) - 1, y + h - 1);
+    if (x0 > x1 || y0 > y1) return;
+
+    if (mark_dirty) {
+      include_overlay_rect({x0, y0, x1, y1});
+    }
+
+    auto *pixels = static_cast<uint32_t *>(overlay_buffer->map);
+    const int pitch = static_cast<int>(overlay_buffer->stride / sizeof(uint32_t));
+    for (int row = y0; row <= y1; ++row) {
+      std::fill(pixels + row * pitch + x0, pixels + row * pitch + x1 + 1, color);
+    }
+  }
+
+  void draw_text_left(int x, int y, const std::string &raw_text, int scale, uint32_t color, int max_width = 0) {
+    if (scale <= 0 || overlay_buffer == nullptr) return;
+    const std::string text = clip_text_to_width(raw_text, scale, max_width);
+    if (text.empty()) return;
+
+    const int width = text_width(text, scale);
+    include_overlay_rect({x, y, x + width - 1, y + 7 * scale - 1});
+
+    int cursor_x = x;
+    for (char raw_char : text) {
+      char c = raw_char;
+      if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+      const auto rows = glyph_rows(c);
+      for (int row = 0; row < 7; ++row) {
+        for (int col = 0; col < 5; ++col) {
+          if ((rows[row] & (1 << (4 - col))) != 0) {
+            fill_rect(cursor_x + col * scale, y + row * scale, scale, scale, color, false);
+          }
+        }
+      }
+      cursor_x += 6 * scale;
+    }
+  }
+
+  void draw_text_center(int center_x, int y, const std::string &text, int scale, uint32_t color, int max_width = 0) {
+    const std::string clipped = clip_text_to_width(text, scale, max_width);
+    draw_text_left(center_x - text_width(clipped, scale) / 2, y, clipped, scale, color);
+  }
+
+  const char *gear_label() const {
+    switch (hud.gear) {
+      case static_cast<int>(cereal::CarState::GearShifter::PARK): return "P";
+      case static_cast<int>(cereal::CarState::GearShifter::REVERSE): return "R";
+      case static_cast<int>(cereal::CarState::GearShifter::NEUTRAL): return "N";
+      case static_cast<int>(cereal::CarState::GearShifter::DRIVE): return "D";
+      case static_cast<int>(cereal::CarState::GearShifter::SPORT): return "S";
+      case static_cast<int>(cereal::CarState::GearShifter::LOW): return "L";
+      default: return "-";
+    }
+  }
+
+  std::string gear_text() const {
+    if (hud.charge_meter > 0.0f) {
+      return format_text("BAT %.0F%%", hud.charge_meter);
+    }
+    if (hud.gear_step > 0 && hud.gear_step < 9) {
+      return format_text("GEAR %s%d", gear_label(), hud.gear_step);
+    }
+    return format_text("GEAR %s", gear_label());
+  }
+
+  bool valid_cruise_speed(float value) const {
+    return value > 0.0f && value < 255.0f;
+  }
+
+  const char *lateral_method_label() const {
+    switch (hud.lateral_control_method) {
+      case 0: return "PID";
+      case 1: return "INDI";
+      case 2: return "LQR";
+      case 3: return "TORQ";
+      case 4: return "MULTI";
+      default: return "--";
+    }
+  }
+
+  bool tpms_available() const {
+    for (float pressure : hud.tpms) {
+      if (pressure > 0.1f && pressure < 100.0f) return true;
+    }
+    return false;
+  }
+
+  std::string tpms_text() const {
+    if (!tpms_available()) return "TPMS --";
+    if (hud.tpms_unit == 2) {
+      return format_text("TP %.1F/%.1F %.1F/%.1F", hud.tpms[0], hud.tpms[1], hud.tpms[2], hud.tpms[3]);
+    }
+    return format_text("TP %.0F/%.0F %.0F/%.0F", hud.tpms[0], hud.tpms[1], hud.tpms[2], hud.tpms[3]);
+  }
+
+  std::string gps_text() const {
+    if (hud.satellite_count <= 0 && hud.gps_accuracy <= 0.0f) return "GPS --";
+    return format_text("GPS %d %.1FM %.0FM", hud.satellite_count, hud.gps_accuracy, hud.altitude);
+  }
+
+  std::string standstill_text() const {
+    if (!hud.standstill && hud.standstill_elapsed <= 0.0f) return "";
+    const int elapsed = std::max(0, static_cast<int>(std::lround(hud.standstill_elapsed)));
+    return format_text("ST %d:%02d", elapsed / 60, elapsed % 60);
+  }
+
+  void draw_hud() {
+    if (overlay_buffer == nullptr) return;
+
+    const int width = static_cast<int>(overlay_buffer->width);
+    const int height = static_cast<int>(overlay_buffer->height);
+    const uint32_t white = argb(230, 255, 255, 255);
+    const uint32_t dim = argb(170, 210, 220, 230);
+    const uint32_t green = argb(230, 80, 230, 95);
+    const uint32_t blue = argb(230, 90, 170, 255);
+    const uint32_t yellow = argb(230, 255, 220, 60);
+    const uint32_t orange = argb(235, 255, 150, 50);
+    const uint32_t red = argb(235, 255, 70, 70);
+
+    const bool alert_active = hud.alert_size > 0 || !hud.alert_text1.empty() || !hud.alert_text2.empty();
+    const uint32_t status = alert_active ? red : (hud.enabled ? green : (hud.engageable ? blue : argb(220, 110, 120, 130)));
+
+    fill_rect(0, 0, width, 122, argb(100, 0, 0, 0));
+    fill_rect(0, 0, width, 6, status);
+
+    const uint32_t speed_color = hud.brake_pressed || hud.brake_lights ? red :
+                                 (hud.gas_pressed ? green :
+                                  (hud.accel < -0.2f || hud.a_req < -0.2f ? orange : white));
+    draw_text_center(width / 2, 18, format_text("%d", static_cast<int>(std::lround(hud.speed_kph))), 8, speed_color, 170);
+    draw_text_center(width / 2, 84, "KPH", 2, dim);
+
+    const std::string set_speed = valid_cruise_speed(hud.v_cruise) ?
+                                  format_text("%d", static_cast<int>(std::lround(hud.v_cruise))) : "---";
+    const std::string cruise_speed = valid_cruise_speed(hud.v_set_dis) ?
+                                     format_text("%d", static_cast<int>(std::lround(hud.v_set_dis))) : "---";
+    draw_text_left(12, 18, "SET", 2, dim);
+    draw_text_left(12, 42, set_speed, 4, white, 100);
+    draw_text_left(12, 86, format_text("CRZ %s%s", cruise_speed.c_str(), hud.cruise_acc ? " ACC" : ""), 2, dim, 135);
+
+    draw_text_left(width - 138, 18, hud.active ? "OP ACT" : (hud.enabled ? "OP EN" : (hud.engageable ? "OP RDY" : "OP OFF")), 2,
+                   hud.enabled ? green : dim, 128);
+    draw_text_left(width - 138, 44, format_text("GAP %u", hud.cruise_gap), 2, dim, 128);
+    draw_text_left(width - 138, 70, gear_text(), 2, dim, 128);
+    draw_text_left(width - 138, 96, hud.control_allowed ? "CTRL OK" : "CTRL --", 2,
+                   hud.control_allowed ? green : dim, 128);
+
+    if (hud.left_blinker) draw_text_left(132, 46, "<", 5, yellow);
+    if (hud.right_blinker) draw_text_left(width - 160, 46, ">", 5, yellow);
+    if (hud.left_blindspot) fill_rect(0, 150, 12, height - 330, red);
+    if (hud.right_blindspot) fill_rect(width - 12, 150, 12, height - 330, red);
+
+    const int panel_h = 196;
+    const int panel_y = height - panel_h;
+    fill_rect(0, panel_y, width, panel_h, argb(105, 0, 0, 0));
+    fill_rect(0, panel_y, width, 2, argb(130, 255, 255, 255));
+
+    const int left_x = 12;
+    const int right_x = width / 2 + 6;
+    int y = panel_y + 12;
+    draw_text_left(left_x, y, format_text("STR %.1F/%.1F", hud.steering_angle, hud.desired_angle), 2, white, 222);
+    draw_text_left(right_x, y, format_text("LANE %.2F/%.2F", hud.l_prob, hud.r_prob), 2, white, 222);
+    y += 20;
+    draw_text_left(left_x, y, format_text("ACC %.2F", hud.accel), 2, dim, 222);
+    draw_text_left(right_x, y, format_text("LW %.1FM DP %.2F", hud.lane_width, hud.d_prob), 2, dim, 222);
+    y += 20;
+    draw_text_left(left_x, y, hud.lead_status ? format_text("LEAD %.0FM %.1F", hud.lead_d, hud.lead_v) : "LEAD --", 2,
+                   hud.lead_status ? white : dim, 222);
+    draw_text_left(right_x, y, format_text("SR %.1F AO %.2F", hud.steer_ratio, hud.angle_offset_avg), 2, dim, 222);
+    y += 20;
+    draw_text_left(left_x, y, format_text("CPU %.0F%% %.0FC", hud.cpu_usage, hud.cpu_temp), 2,
+                   hud.cpu_temp >= 85.0f ? red : (hud.cpu_temp >= 75.0f ? orange : dim), 222);
+    draw_text_left(right_x, y, format_text("SF %.2F MEM %.0F%%", hud.stiffness_factor, hud.memory_usage), 2, dim, 222);
+    y += 20;
+    draw_text_left(left_x, y, format_text("BS %s/%s", hud.left_blindspot ? "L" : "-", hud.right_blindspot ? "R" : "-"), 2,
+                   (hud.left_blindspot || hud.right_blindspot) ? red : dim, 222);
+    draw_text_left(right_x, y, format_text("%s TCO %.2F", hud.laneless ? "LANELESS" : "LANE", -hud.total_camera_offset), 2, dim, 222);
+    y += 20;
+    draw_text_left(left_x, y, tpms_text(), 2, tpms_available() ? dim : argb(130, 180, 185, 190), 222);
+    draw_text_left(right_x, y, gps_text(), 2, hud.satellite_count > 0 ? dim : argb(130, 180, 185, 190), 222);
+    y += 20;
+    draw_text_left(left_x, y, format_text("M %.0F R%.2F/%.2F", hud.model_execution_ms, hud.road_edge_confs[0], hud.road_edge_confs[1]), 2, dim, 222);
+    draw_text_left(right_x, y, format_text("L %.1F %.1F %.1F %.1F", hud.lane_line_probs[0], hud.lane_line_probs[1],
+                                           hud.lane_line_probs[2], hud.lane_line_probs[3]), 2, dim, 222);
+    y += 20;
+    draw_text_left(left_x, y, format_text("TQ %.1F RPM %.0F", hud.steering_torque, hud.engine_rpm), 2, dim, 222);
+    draw_text_left(right_x, y, format_text("M %s AD %.2F", lateral_method_label(), hud.steer_actuator_delay), 2, dim, 222);
+    y += 20;
+    draw_text_left(left_x, y, format_text("%s%s%s", hud.brake_hold ? "HLD " : "",
+                                          standstill_text().c_str(),
+                                          hud.driver_acc ? " DRV" : ""), 2, dim, 222);
+    draw_text_left(right_x, y, format_text("%s SC %.2F S %.0F", hud.longitudinal_control ? "LNG" : "LAT",
+                                           hud.output_scale, hud.safety_speed), 2, dim, 222);
+
+    if (alert_active) {
+      const uint32_t alert_color = hud.alert_size >= 3 ? argb(210, 150, 0, 0) : argb(190, 170, 90, 0);
+      const int alert_y = height - panel_h - 72;
+      fill_rect(0, alert_y, width, 72, alert_color);
+      draw_text_center(width / 2, alert_y + 12, hud.alert_text1.empty() ? "ALERT" : hud.alert_text1, 3, white, width - 24);
+      draw_text_center(width / 2, alert_y + 44, hud.alert_text2.empty() ? hud.alert_type : hud.alert_text2, 2, white, width - 24);
+    }
+  }
+
   void fill_poly(const K230Poly &poly, uint32_t color) {
     if (poly.cnt < 3) return;
 
@@ -567,11 +1093,14 @@ private:
   std::vector<K230Rect> overlay_dirty_rects;
   K230Rect current_overlay_dirty;
   K230Mat3 view_from_calib = {};
+  K230HudState hud;
   uint64_t last_model_frame = 0;
+  uint64_t overlay_frame_counter = 0;
   size_t video_buffer_index = 0;
   size_t overlay_buffer_index = 0;
   bool setup = false;
   bool first_overlay = true;
+  bool pending_hud_update = true;
 };
 
 }  // namespace

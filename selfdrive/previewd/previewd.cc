@@ -51,6 +51,13 @@ struct K230Poly {
   int cnt = 0;
 };
 
+struct K230Rect {
+  int x0 = 0;
+  int y0 = 0;
+  int x1 = -1;
+  int y1 = -1;
+};
+
 struct K230Mat3 {
   float v[9] = {};
 };
@@ -163,7 +170,7 @@ public:
 
       auto *src = static_cast<const uint8_t *>(ctx.buffers[ctx.vbuffer.index].mmap);
       video_buffer_index = (video_buffer_index + 1) % video_buffers.size();
-      rotate_nv12_90(src, video_buffers[video_buffer_index]);
+      rotate_nv12_90_tiled(src, video_buffers[video_buffer_index]);
       v4l2_drm_dump_release(&ctx);
 
       update_overlay();
@@ -184,10 +191,11 @@ public:
       v4l2_drm_stop(&ctx);
       setup = false;
     }
-    if (overlay_buffer != nullptr) {
-      display_free_buffer(overlay_buffer);
-      overlay_buffer = nullptr;
+    for (display_buffer *buffer : overlay_buffers) {
+      display_free_buffer(buffer);
     }
+    overlay_buffers.clear();
+    overlay_buffer = nullptr;
     if (overlay_plane != nullptr) {
       display_free_plane(overlay_plane);
       overlay_plane = nullptr;
@@ -272,7 +280,7 @@ private:
     }
   }
 
-  void rotate_nv12_90(const uint8_t *src, display_buffer *dst) {
+  void rotate_nv12_90_tiled(const uint8_t *src, display_buffer *dst) {
     const int src_w = static_cast<int>(cfg.width);
     const int src_h = static_cast<int>(cfg.height);
     const int dst_h = static_cast<int>(dst->height);
@@ -281,24 +289,37 @@ private:
     const uint8_t *src_y = src;
     const uint8_t *src_uv = src + src_w * src_h;
 
-    for (int y = 0; y < src_h; ++y) {
-      for (int x = 0; x < src_w; ++x) {
-        const int dx = src_h - 1 - y;
-        const int dy = x;
-        dst_y[dy * dst->stride + dx] = src_y[y * src_w + x];
+    constexpr int tile_w = 32;
+    constexpr int tile_h = 32;
+    for (int y0 = 0; y0 < src_h; y0 += tile_h) {
+      const int y1 = std::min(y0 + tile_h, src_h);
+      for (int x0 = 0; x0 < src_w; x0 += tile_w) {
+        const int x1 = std::min(x0 + tile_w, src_w);
+        for (int x = x0; x < x1; ++x) {
+          uint8_t *d = dst_y + x * dst->stride + (src_h - y1);
+          for (int y = y1 - 1; y >= y0; --y) {
+            *d++ = src_y[y * src_w + x];
+          }
+        }
       }
     }
 
     const int src_ch = src_h / 2;
     const int src_cw = src_w / 2;
-    for (int cy = 0; cy < src_ch; ++cy) {
-      for (int cx = 0; cx < src_cw; ++cx) {
-        const int dcx = src_ch - 1 - cy;
-        const int dcy = cx;
-        const uint8_t *s = src_uv + cy * src_w + cx * 2;
-        uint8_t *d = dst_uv + dcy * dst->stride + dcx * 2;
-        d[0] = s[0];
-        d[1] = s[1];
+    constexpr int uv_tile_w = 32;
+    constexpr int uv_tile_h = 16;
+    for (int cy0 = 0; cy0 < src_ch; cy0 += uv_tile_h) {
+      const int cy1 = std::min(cy0 + uv_tile_h, src_ch);
+      for (int cx0 = 0; cx0 < src_cw; cx0 += uv_tile_w) {
+        const int cx1 = std::min(cx0 + uv_tile_w, src_cw);
+        for (int cx = cx0; cx < cx1; ++cx) {
+          uint8_t *d = dst_uv + cx * dst->stride + (src_ch - cy1) * 2;
+          for (int cy = cy1 - 1; cy >= cy0; --cy) {
+            const uint8_t *s = src_uv + cy * src_w + cx * 2;
+            *d++ = s[0];
+            *d++ = s[1];
+          }
+        }
       }
     }
   }
@@ -310,16 +331,23 @@ private:
       return;
     }
 
-    overlay_buffer = display_allocate_buffer(overlay_plane, display->width, display->height);
-    if (overlay_buffer == nullptr) {
-      LOGE("K230 previewd could not allocate ARGB overlay buffer");
-      display_free_plane(overlay_plane);
-      overlay_plane = nullptr;
-      return;
+    for (int i = 0; i < 2; ++i) {
+      display_buffer *buffer = display_allocate_buffer(overlay_plane, display->width, display->height);
+      if (buffer == nullptr) {
+        LOGE("K230 previewd could not allocate ARGB overlay buffer");
+        for (display_buffer *allocated : overlay_buffers) {
+          display_free_buffer(allocated);
+        }
+        overlay_buffers.clear();
+        display_free_plane(overlay_plane);
+        overlay_plane = nullptr;
+        return;
+      }
+      std::memset(buffer->map, 0, buffer->size);
+      overlay_buffers.push_back(buffer);
     }
-
-    std::memset(overlay_buffer->map, 0, overlay_buffer->size);
-    overlay_scratch.resize(overlay_buffer->size);
+    overlay_dirty_rects.resize(overlay_buffers.size());
+    overlay_buffer = overlay_buffers[0];
   }
 
   bool update_model_state() {
@@ -337,24 +365,59 @@ private:
 
   void update_overlay() {
     const bool calib_changed = update_model_state();
-    if (overlay_buffer == nullptr) return;
+    if (overlay_buffers.empty()) return;
 
     const uint64_t model_frame = sm.rcv_frame("modelV2");
     if (!first_overlay && !calib_changed && model_frame == last_model_frame) {
       return;
     }
 
-    std::memset(overlay_scratch.data(), 0, overlay_scratch.size());
+    overlay_buffer_index = (overlay_buffer_index + 1) % overlay_buffers.size();
+    overlay_buffer = overlay_buffers[overlay_buffer_index];
+    clear_overlay_rect(overlay_buffer, overlay_dirty_rects[overlay_buffer_index]);
+    current_overlay_dirty = {};
     if (model_frame > 0) {
       draw_model(sm["modelV2"].getModelV2());
     }
+    overlay_dirty_rects[overlay_buffer_index] = current_overlay_dirty;
     first_overlay = false;
     last_model_frame = model_frame;
 
-    std::memcpy(overlay_buffer->map, overlay_scratch.data(), overlay_buffer->size);
     if (display_update_buffer(overlay_buffer, 0, 0) != 0) {
       LOGE("K230 previewd overlay update failed");
     }
+  }
+
+  bool rect_valid(const K230Rect &rect) const {
+    return rect.x0 <= rect.x1 && rect.y0 <= rect.y1;
+  }
+
+  void clear_overlay_rect(display_buffer *buffer, const K230Rect &rect) {
+    if (!rect_valid(rect)) return;
+
+    auto *base = static_cast<uint8_t *>(buffer->map);
+    const int x0 = std::max(0, rect.x0);
+    const int y0 = std::max(0, rect.y0);
+    const int x1 = std::min(static_cast<int>(buffer->width) - 1, rect.x1);
+    const int y1 = std::min(static_cast<int>(buffer->height) - 1, rect.y1);
+    if (x0 > x1 || y0 > y1) return;
+
+    const size_t bytes = static_cast<size_t>(x1 - x0 + 1) * sizeof(uint32_t);
+    for (int y = y0; y <= y1; ++y) {
+      std::memset(base + static_cast<size_t>(y) * buffer->stride + static_cast<size_t>(x0) * sizeof(uint32_t), 0, bytes);
+    }
+  }
+
+  void include_overlay_rect(const K230Rect &rect) {
+    if (!rect_valid(rect)) return;
+    if (!rect_valid(current_overlay_dirty)) {
+      current_overlay_dirty = rect;
+      return;
+    }
+    current_overlay_dirty.x0 = std::min(current_overlay_dirty.x0, rect.x0);
+    current_overlay_dirty.y0 = std::min(current_overlay_dirty.y0, rect.y0);
+    current_overlay_dirty.x1 = std::max(current_overlay_dirty.x1, rect.x1);
+    current_overlay_dirty.y1 = std::max(current_overlay_dirty.y1, rect.y1);
   }
 
   int path_length_idx(const cereal::ModelDataV2::XYZTData::Reader &line, float path_height) const {
@@ -445,19 +508,27 @@ private:
   void fill_poly(const K230Poly &poly, uint32_t color) {
     if (poly.cnt < 3) return;
 
-    auto *pixels = reinterpret_cast<uint32_t *>(overlay_scratch.data());
+    auto *pixels = static_cast<uint32_t *>(overlay_buffer->map);
     const int width = static_cast<int>(overlay_buffer->stride / 4);
     const int height = static_cast<int>(overlay_buffer->height);
 
     float min_y = poly.points[0].y;
     float max_y = poly.points[0].y;
+    float min_x = poly.points[0].x;
+    float max_x = poly.points[0].x;
     for (int i = 1; i < poly.cnt; ++i) {
       min_y = std::min(min_y, poly.points[i].y);
       max_y = std::max(max_y, poly.points[i].y);
+      min_x = std::min(min_x, poly.points[i].x);
+      max_x = std::max(max_x, poly.points[i].x);
     }
 
     const int y0 = std::max(0, static_cast<int>(std::floor(min_y)));
     const int y1 = std::min(height - 1, static_cast<int>(std::ceil(max_y)));
+    const int dirty_x0 = std::max(0, static_cast<int>(std::floor(min_x)));
+    const int dirty_x1 = std::min(static_cast<int>(overlay_buffer->width) - 1, static_cast<int>(std::ceil(max_x)));
+    include_overlay_rect({dirty_x0, y0, dirty_x1, y1});
+
     std::array<float, K230_OVERLAY_VERTICES> intersections = {};
 
     for (int y = y0; y <= y1; ++y) {
@@ -492,10 +563,13 @@ private:
   std::vector<display_buffer *> video_buffers;
   struct display_plane *overlay_plane = nullptr;
   struct display_buffer *overlay_buffer = nullptr;
-  std::vector<uint8_t> overlay_scratch;
+  std::vector<display_buffer *> overlay_buffers;
+  std::vector<K230Rect> overlay_dirty_rects;
+  K230Rect current_overlay_dirty;
   K230Mat3 view_from_calib = {};
   uint64_t last_model_frame = 0;
   size_t video_buffer_index = 0;
+  size_t overlay_buffer_index = 0;
   bool setup = false;
   bool first_overlay = true;
 };

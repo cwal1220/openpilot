@@ -10,6 +10,7 @@ JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 CASADI_VERSION="${K230_CASADI_VERSION:-3.7.1}"
 PYCAPNP_SPEC="${K230_PYCAPNP_SPEC:-pycapnp==2.2.3}"
 FUTURE_FSTRINGS_SPEC="${K230_FUTURE_FSTRINGS_SPEC:-future-fstrings==1.2.0}"
+RISCV_OPT_FLAGS="${OPENPILOT_RISCV_OPT_FLAGS--march=rv64gcv -mabi=lp64d}"
 
 if [[ ! -d "$SYSROOT/usr/lib/riscv64-linux-gnu" ]]; then
   echo "missing K230 sysroot: $SYSROOT" >&2
@@ -92,6 +93,7 @@ DOCKERFILE
 fi
 
 docker run --rm \
+  -e OPENPILOT_RISCV_OPT_FLAGS="$RISCV_OPT_FLAGS" \
   -v "$ROOT:/work/openpilot" \
   -v "$SYSROOT:/work/sysroot:ro" \
   -w /work/openpilot \

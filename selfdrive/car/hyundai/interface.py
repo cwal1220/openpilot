@@ -7,6 +7,11 @@ from selfdrive.car.hyundai.values import CAR, EV_CAR, HYBRID_CAR, Buttons, CarCo
 from selfdrive.car import STD_CARGO_KG, scale_rot_inertia, scale_tire_stiffness, gen_empty_fingerprint, get_safety_config
 from selfdrive.car.interfaces import CarInterfaceBase
 from selfdrive.car.disable_ecu import disable_ecu
+try:
+  from opendbc.can.parser_pyx import CANParserGroup, update_can_parsers
+except ImportError:
+  CANParserGroup = None
+  update_can_parsers = None
 
 from common.params import Params
 from decimal import Decimal
@@ -18,6 +23,7 @@ class CarInterface(CarInterfaceBase):
   def __init__(self, CP, CarController, CarState):
     super().__init__(CP, CarController, CarState)
     self.cp2 = self.CS.get_can2_parser(CP)
+    self.can_parser_group = CANParserGroup((self.cp, self.cp2, self.cp_cam)) if CANParserGroup is not None else None
     self.lkas_button_alert = False
 
     self.blinker_status = 0
@@ -280,17 +286,18 @@ class CarInterface(CarInterfaceBase):
   #     disable_ecu(logcan, sendcan, addr=0x7d0, com_cont_req=b'\x28\x83\x01')
 
   def update(self, c, can_strings):
-    self.cp.update_strings(can_strings)
-    self.cp2.update_strings(can_strings)
-    self.cp_cam.update_strings(can_strings)
+    if self.can_parser_group is not None:
+      self.can_parser_group.update_strings(can_strings, return_updated=False)
+    elif update_can_parsers is not None:
+      update_can_parsers((self.cp, self.cp2, self.cp_cam), can_strings, return_updated=False)
+    else:
+      self.cp.update_strings(can_strings)
+      self.cp2.update_strings(can_strings)
+      self.cp_cam.update_strings(can_strings)
 
     ret = self.CS.update(self.cp, self.cp2, self.cp_cam)
     ret.canValid = self.cp.can_valid and self.cp2.can_valid and self.cp_cam.can_valid
     ret.steeringRateLimited = self.CC.steer_rate_limited if self.CC is not None else False
-
-    if not self.cp.can_valid or not self.cp2.can_valid or not self.cp_cam.can_valid:
-      print('cp={}  cp2={}  cp_cam={}'.format(bool(self.cp.can_valid), bool(self.cp2.can_valid), bool(self.cp_cam.can_valid)))
-
 
     if self.CP.pcmCruise and not self.CC.scc_live:
       self.CP.pcmCruise = False

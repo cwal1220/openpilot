@@ -1,4 +1,3 @@
-import numpy as np
 from cereal import log
 from common.conversions import Conversions as CV
 from common.realtime import DT_MDL
@@ -64,18 +63,19 @@ class DesireHelper:
 
     self.output_scale = 0.0
     self.ready_to_change = False
+    self.lat_tuning = CP.lateralTuning.which()
 
   def update(self, CP, carstate, controlstate, lane_change_prob, md):
     try:
-      if CP.lateralTuning.which() == 'pid':
+      if self.lat_tuning == 'pid':
         self.output_scale = controlstate.lateralControlState.pidState.output
-      elif CP.lateralTuning.which() == 'indi':
+      elif self.lat_tuning == 'indi':
         self.output_scale = controlstate.lateralControlState.indiState.output
-      elif CP.lateralTuning.which() == 'lqr':
+      elif self.lat_tuning == 'lqr':
         self.output_scale = controlstate.lateralControlState.lqrState.output
-      elif CP.lateralTuning.which() == 'torque':
+      elif self.lat_tuning == 'torque':
         self.output_scale = controlstate.lateralControlState.torqueState.output
-      elif CP.lateralTuning.which() == 'atom':
+      elif self.lat_tuning == 'atom':
         self.output_scale = controlstate.lateralControlState.atomState.output
     except:
       pass
@@ -83,20 +83,6 @@ class DesireHelper:
     one_blinker = carstate.leftBlinker != carstate.rightBlinker
 
     below_lane_change_speed = (v_ego < LANE_CHANGE_SPEED_MIN) or (LANE_CHANGE_SPEED_MIN == -1)
-
-    left_edge_prob = np.clip(1.0 - md.roadEdgeStds[0], 0.0, 1.0)
-    left_nearside_prob = md.laneLineProbs[0]
-    left_close_prob = md.laneLineProbs[1]
-    right_close_prob = md.laneLineProbs[2]
-    right_nearside_prob = md.laneLineProbs[3]
-    right_edge_prob = np.clip(1.0 - md.roadEdgeStds[1], 0.0, 1.0)
-
-    if right_edge_prob > 0.35 and right_nearside_prob < 0.2 and left_nearside_prob >= right_nearside_prob:
-      road_edge_stat = 1
-    elif left_edge_prob > 0.35 and left_nearside_prob < 0.2 and right_nearside_prob >= left_nearside_prob:
-      road_edge_stat = -1
-    else:
-      road_edge_stat = 0
 
     if carstate.leftBlinker:
       self.lane_change_direction = LaneChangeDirection.left
@@ -106,6 +92,18 @@ class DesireHelper:
       lane_direction = 1
     else:
       lane_direction = 2
+
+    road_edge_stat = 0
+    if self.lane_change_state == LaneChangeState.off and (carstate.leftBlinker or carstate.rightBlinker):
+      left_edge_prob = min(max(1.0 - md.roadEdgeStds[0], 0.0), 1.0)
+      left_nearside_prob = md.laneLineProbs[0]
+      right_nearside_prob = md.laneLineProbs[3]
+      right_edge_prob = min(max(1.0 - md.roadEdgeStds[1], 0.0), 1.0)
+
+      if right_edge_prob > 0.35 and right_nearside_prob < 0.2 and left_nearside_prob >= right_nearside_prob:
+        road_edge_stat = 1
+      elif left_edge_prob > 0.35 and left_nearside_prob < 0.2 and right_nearside_prob >= left_nearside_prob:
+        road_edge_stat = -1
 
     if self.lane_change_state == LaneChangeState.off and road_edge_stat == lane_direction:
       self.lane_change_direction = LaneChangeDirection.none

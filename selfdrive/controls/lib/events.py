@@ -51,12 +51,6 @@ try:
 except:
   LANG_FILE='/data/openpilot/selfdrive/assets/addon/lang/events/main_en.txt'
   pass
-try:
-  IS_WAZE = Params().get("OPKRNaviSelect", encoding="utf8") == "3" or Params().get("OPKRNaviSelect", encoding="utf8") == "5"
-except:
-  IS_WAZE = False
-  pass
-
 # opkr
 def tr(line_num: int):
   return linecache.getline(LANG_FILE, line_num)
@@ -65,7 +59,11 @@ class Events:
   def __init__(self):
     self.events: List[int] = []
     self.static_events: List[int] = []
-    self.events_prev = dict.fromkeys(EVENTS.keys(), 0)
+    self.events_prev = {}
+    self._msg_cache_key = ()
+    self._msg_cache = []
+    self.event_types = set()
+    self.static_event_types = set()
 
   @property
   def names(self) -> List[int]:
@@ -77,14 +75,18 @@ class Events:
   def add(self, event_name: int, static: bool=False) -> None:
     if static:
       self.static_events.append(event_name)
+      self.static_event_types.update(EVENTS.get(event_name, {}))
     self.events.append(event_name)
+    self.event_types.update(EVENTS.get(event_name, {}))
 
   def clear(self) -> None:
-    self.events_prev = {k: (v + 1 if k in self.events else 0) for k, v in self.events_prev.items()}
+    self.events_prev = {e: self.events_prev.get(e, 0) + 1 for e in self.events}
     self.events = self.static_events.copy()
+    self.event_types.clear()
+    self.event_types.update(self.static_event_types)
 
   def any(self, event_type: str) -> bool:
-    return any(event_type in EVENTS.get(e, {}) for e in self.events)
+    return event_type in self.event_types
 
   def create_alerts(self, event_types: List[str], callback_args=None):
     if callback_args is None:
@@ -99,24 +101,38 @@ class Events:
           if not isinstance(alert, Alert):
             alert = alert(*callback_args)
 
-          if DT_CTRL * (self.events_prev[e] + 1) >= alert.creation_delay:
+          if DT_CTRL * (self.events_prev.get(e, 0) + 1) >= alert.creation_delay:
             alert.alert_type = f"{EVENT_NAME[e]}/{et}"
             alert.event_type = et
             ret.append(alert)
     return ret
 
   def add_from_msg(self, events):
+    append = self.events.append
+    event_types = self.event_types
+    event_defs = EVENTS
     for e in events:
-      self.events.append(e.name.raw)
+      event_name = e.name.raw
+      append(event_name)
+      event_types.update(event_defs.get(event_name, {}))
 
   def to_msg(self):
+    key = tuple(self.events)
+    if key == self._msg_cache_key:
+      return self._msg_cache
+
     ret = []
+    append = ret.append
+    new_event = car.CarEvent.new_message
+    events = EVENTS
     for event_name in self.events:
-      event = car.CarEvent.new_message()
+      event = new_event()
       event.name = event_name
-      for event_type in EVENTS.get(event_name, {}):
+      for event_type in events.get(event_name, {}):
         setattr(event, event_type, True)
-      ret.append(event)
+      append(event)
+    self._msg_cache_key = key
+    self._msg_cache = ret
     return ret
 
 
@@ -305,15 +321,6 @@ def can_error_alert(CP: car.CarParams, sm: messaging.SubMaster, metric: bool, so
       "",
       AlertStatus.normal, AlertSize.small,
       Priority.LOW, VisualAlert.none, AudibleAlert.none, .2, creation_delay=1.)
-
-def navi_alert(CP: car.CarParams, sm: messaging.SubMaster, metric: bool, soft_disable_time: int) -> Alert:
-  return Alert(
-    tr(193) if IS_WAZE else tr(95),
-    "",
-    AlertStatus.normal, AlertSize.small,
-    Priority.LOW, VisualAlert.none, AudibleAlert.none, .5, alert_rate=0.75)
-
-
 
 EVENTS: Dict[int, Dict[str, Union[Alert, AlertCallbackType]]] = {
   # ********** events with no alerts **********
@@ -716,7 +723,11 @@ EVENTS: Dict[int, Dict[str, Union[Alert, AlertCallbackType]]] = {
   },
 
   EventName.camSpeedDown: {
-    ET.WARNING: navi_alert,
+    ET.WARNING: Alert(
+      tr(95),
+      "",
+      AlertStatus.normal, AlertSize.small,
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, .5, alert_rate=0.75),
   },
 
   EventName.standstillResButton: {

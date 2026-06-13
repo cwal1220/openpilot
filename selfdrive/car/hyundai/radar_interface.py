@@ -30,7 +30,7 @@ def get_radar_can_parser(CP):
         ("REL_SPEED", msg),
       ]
       checks += [(msg, 50)]
-    return CANParser(DBC[CP.carFingerprint]['radar'], signals, checks, CP.sccBus)
+    return CANParser(DBC[CP.carFingerprint]['radar'], signals, checks, CP.sccBus, track_all=False)
   else:
     signals = [
       # signal_name, signal_address
@@ -44,7 +44,7 @@ def get_radar_can_parser(CP):
       # address, frequency
       ("SCC11", 50),
     ]
-    return CANParser(DBC[CP.carFingerprint]['pt'], signals, checks, CP.sccBus)
+    return CANParser(DBC[CP.carFingerprint]['pt'], signals, checks, CP.sccBus, track_all=False)
 
 
 class RadarInterface(RadarInterfaceBase):

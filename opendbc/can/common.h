@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 #include <map>
 #include <unordered_map>
@@ -20,33 +21,41 @@
 #define MAX_BAD_COUNTER 5
 
 // Car specific functions
+unsigned int honda_checksum(uint32_t address, const uint8_t *d, size_t d_size);
+unsigned int toyota_checksum(uint32_t address, const uint8_t *d, size_t d_size);
+unsigned int subaru_checksum(uint32_t address, const uint8_t *d, size_t d_size);
+unsigned int chrysler_checksum(uint32_t address, const uint8_t *d, size_t d_size);
 unsigned int honda_checksum(uint32_t address, const std::vector<uint8_t> &d);
 unsigned int toyota_checksum(uint32_t address, const std::vector<uint8_t> &d);
 unsigned int subaru_checksum(uint32_t address, const std::vector<uint8_t> &d);
 unsigned int chrysler_checksum(uint32_t address, const std::vector<uint8_t> &d);
 void init_crc_lookup_tables();
+unsigned int volkswagen_crc(uint32_t address, const uint8_t *d, size_t d_size);
+unsigned int pedal_checksum(const uint8_t *d, size_t d_size);
 unsigned int volkswagen_crc(uint32_t address, const std::vector<uint8_t> &d);
 unsigned int pedal_checksum(const std::vector<uint8_t> &d);
 
 class MessageState {
 public:
-  uint32_t address;
-  unsigned int size;
+  uint32_t address = 0;
+  unsigned int size = 0;
 
   std::vector<Signal> parse_sigs;
   std::vector<double> vals;
   std::vector<std::vector<double>> all_vals;
+  bool track_all_values = true;
 
-  uint64_t seen;
-  uint64_t check_threshold;
+  uint64_t seen = 0;
+  uint64_t check_threshold = 0;
 
-  uint8_t counter;
-  uint8_t counter_fail;
+  uint8_t counter = 0;
+  uint8_t counter_fail = 0;
+  bool updated = true;
 
   bool ignore_checksum = false;
   bool ignore_counter = false;
 
-  bool parse(uint64_t sec, const std::vector<uint8_t> &dat);
+  bool parse(uint64_t sec, const uint8_t *dat, size_t dat_size);
   bool update_counter_generic(int64_t v, int cnt_size);
 };
 
@@ -57,6 +66,7 @@ private:
 
   const DBC *dbc = NULL;
   std::unordered_map<uint32_t, MessageState> message_states;
+  std::vector<MessageState *> checked_message_states;
 
 public:
   bool can_valid = false;
@@ -67,7 +77,8 @@ public:
 
   CANParser(int abus, const std::string& dbc_name,
             const std::vector<MessageParseOptions> &options,
-            const std::vector<SignalParseOptions> &sigoptions);
+            const std::vector<SignalParseOptions> &sigoptions,
+            bool track_all_values=true);
   CANParser(int abus, const std::string& dbc_name, bool ignore_checksum, bool ignore_counter);
   #ifndef DYNAMIC_CAPNP
   void update_string(const std::string &data, bool sendcan);
@@ -76,7 +87,12 @@ public:
   void UpdateCans(uint64_t sec, const capnp::DynamicStruct::Reader& cans);
   void UpdateValid(uint64_t sec);
   std::vector<SignalValue> query_latest();
+  std::vector<SignalValue> query_updated();
 };
+
+#ifndef DYNAMIC_CAPNP
+void update_string_parsers(const std::vector<CANParser *> &parsers, const std::string &data, bool sendcan);
+#endif
 
 class CANPacker {
 private:

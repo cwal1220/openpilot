@@ -272,6 +272,43 @@ cdef class AcadosOcpSolverCython:
         return out
 
 
+    def get_many(self, str field_, out_, int start_stage=0, int count=-1):
+        """
+        Get the same output field for consecutive stages into an existing 2D array.
+        """
+        out_fields = ['x', 'u', 'z', 'pi', 'lam', 't', 'sl', 'su']
+        field = field_.encode('utf-8')
+
+        if field_ not in out_fields:
+            raise Exception('AcadosOcpSolverCython.get_many(): {} is an invalid argument.\
+                    \n Possible values are {}. Exiting.'.format(field_, out_fields))
+
+        cdef cnp.ndarray[cnp.float64_t, ndim=2, mode='c'] out = out_
+        cdef int i
+        cdef int stage
+        cdef int dims
+
+        if count < 0:
+            count = out.shape[0]
+        if start_stage < 0 or count < 0 or start_stage + count > self.N + 1:
+            raise Exception('AcadosOcpSolverCython.get_many(): stage range must be within [0, N].')
+        if out.shape[0] < count:
+            raise Exception('AcadosOcpSolverCython.get_many(): output has fewer rows than requested.')
+
+        for i in range(count):
+            stage = start_stage + i
+            if stage == self.N and field_ == 'pi':
+                raise Exception('AcadosOcpSolverCython.get_many(): field {} does not exist at final stage {}.'\
+                    .format(field_, stage))
+            dims = acados_solver_common.ocp_nlp_dims_get_from_attr(self.nlp_config,
+                self.nlp_dims, self.nlp_out, stage, field)
+            if out.shape[1] != dims:
+                raise Exception('AcadosOcpSolverCython.get_many(): mismatching dimension' +
+                    f' for field "{field_}" at stage {stage} with dimension {dims} (you have {out.shape[1]})')
+            acados_solver_common.ocp_nlp_out_get(self.nlp_config,
+                self.nlp_dims, self.nlp_out, stage, field, <void *> &out[i, 0])
+
+
     def print_statistics(self):
         """
         prints statistics of previous solver run as a table:
@@ -581,6 +618,35 @@ cdef class AcadosOcpSolverCython:
             self.nlp_dims, self.nlp_in, stage, field, <void *> &value[0][0])
 
 
+    def cost_set_many(self, str field_, value_, int start_stage=0, int count=-1):
+        """
+        Set a vector cost field for consecutive stages from a 2D row-major array.
+        """
+        field = field_.encode('utf-8')
+
+        cdef cnp.ndarray[cnp.float64_t, ndim=2, mode='c'] value = value_
+        cdef int i
+        cdef int stage
+        cdef int dims[2]
+
+        if count < 0:
+            count = value.shape[0]
+        if start_stage < 0 or count < 0 or start_stage + count > self.N + 1:
+            raise Exception('AcadosOcpSolverCython.cost_set_many(): stage range must be within [0, N].')
+        if value.shape[0] < count:
+            raise Exception('AcadosOcpSolverCython.cost_set_many(): input has fewer rows than requested.')
+
+        for i in range(count):
+            stage = start_stage + i
+            acados_solver_common.ocp_nlp_cost_dims_get_from_attr(self.nlp_config,
+                self.nlp_dims, self.nlp_out, stage, field, &dims[0])
+            if value.shape[1] != dims[0] or dims[1] != 0:
+                raise Exception('AcadosOcpSolverCython.cost_set_many(): mismatching dimension' +
+                    f' for field "{field_}" at stage {stage} with dimension {tuple(dims)} (you have {(value.shape[1], 0)})')
+            acados_solver_common.ocp_nlp_cost_model_set(self.nlp_config,
+                self.nlp_dims, self.nlp_in, stage, field, <void *> &value[i, 0])
+
+
     def constraints_set(self, int stage, str field_, value_):
         """
         Set numerical data in the constraint module of the solver.
@@ -614,6 +680,24 @@ cdef class AcadosOcpSolverCython:
             self.nlp_dims, self.nlp_in, stage, field, <void *> &value[0][0])
 
         return
+
+
+    def set_params_many(self, value_, int start_stage=0, int count=-1):
+        """
+        Set the same parameter vector for consecutive stages.
+        """
+        cdef cnp.ndarray[cnp.float64_t, ndim=1, mode='c'] value = np.ascontiguousarray(value_, dtype=np.float64)
+        cdef int i
+        cdef int stage
+
+        if count < 0:
+            count = self.N + 1 - start_stage
+        if start_stage < 0 or count < 0 or start_stage + count > self.N + 1:
+            raise Exception('AcadosOcpSolverCython.set_params_many(): stage range must be within [0, N].')
+
+        for i in range(count):
+            stage = start_stage + i
+            assert acados_solver.acados_update_params(self.capsule, stage, <double *> value.data, value.shape[0]) == 0
 
 
     def dynamics_get(self, int stage, str field_):

@@ -53,6 +53,8 @@ T_IDXS_LST = [index_function(idx, max_val=MAX_T, max_idx=N) for idx in range(N+1
 
 T_IDXS = np.array(T_IDXS_LST)
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
+T_IDXS_SQ = T_IDXS ** 2
+T_IDXS_PLUS_0_05 = T_IDXS + 0.05
 MIN_ACCEL = -4.0
 T_FOLLOW = 1.45
 COMFORT_BRAKE = 2.5
@@ -201,24 +203,26 @@ class LongitudinalMpc:
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.desired_TR = desired_TR
     self.v_ego = 0.
+    self._last_weight_key = None
     self.reset()
     self.source = SOURCES[2]
 
+    self.params_reader = Params()
     self.TR = 1.45
     self.dynamic_TR = 0
-    self.cruise_gap1 = float(Decimal(Params().get("CruiseGap1", encoding="utf8")) * Decimal('0.1'))
-    self.cruise_gap2 = float(Decimal(Params().get("CruiseGap2", encoding="utf8")) * Decimal('0.1'))
-    self.cruise_gap3 = float(Decimal(Params().get("CruiseGap3", encoding="utf8")) * Decimal('0.1'))
-    self.cruise_gap4 = float(Decimal(Params().get("CruiseGap4", encoding="utf8")) * Decimal('0.1'))
+    self.cruise_gap1 = float(Decimal(self.params_reader.get("CruiseGap1", encoding="utf8")) * Decimal('0.1'))
+    self.cruise_gap2 = float(Decimal(self.params_reader.get("CruiseGap2", encoding="utf8")) * Decimal('0.1'))
+    self.cruise_gap3 = float(Decimal(self.params_reader.get("CruiseGap3", encoding="utf8")) * Decimal('0.1'))
+    self.cruise_gap4 = float(Decimal(self.params_reader.get("CruiseGap4", encoding="utf8")) * Decimal('0.1'))
 
-    self.dynamic_tr_spd = list(map(float, Params().get("DynamicTRSpd", encoding="utf8").split(',')))
-    self.dynamic_tr_set = list(map(float, Params().get("DynamicTRSet", encoding="utf8").split(',')))
-    self.dynamic_TR_mode = int(Params().get("DynamicTRGap", encoding="utf8"))
-    self.custom_tr_enabled = Params().get_bool("CustomTREnabled")
+    self.dynamic_tr_spd = list(map(float, self.params_reader.get("DynamicTRSpd", encoding="utf8").split(',')))
+    self.dynamic_tr_set = list(map(float, self.params_reader.get("DynamicTRSet", encoding="utf8").split(',')))
+    self.dynamic_TR_mode = int(self.params_reader.get("DynamicTRGap", encoding="utf8"))
+    self.custom_tr_enabled = self.params_reader.get_bool("CustomTREnabled")
 
-    self.ms_to_spd = CV.MS_TO_KPH if Params().get_bool("IsMetric") else CV.MS_TO_MPH
+    self.ms_to_spd = CV.MS_TO_KPH if self.params_reader.get_bool("IsMetric") else CV.MS_TO_MPH
 
-    self.stop_line = Params().get_bool("ShowStopLine")
+    self.stop_line = self.params_reader.get_bool("ShowStopLine")
 
     self.lo_timer = 0 
 
@@ -228,6 +232,24 @@ class LongitudinalMpc:
     self.cruise_target = np.zeros(13, dtype=np.float64)
     self.stopline = np.zeros(13, dtype=np.float64)
     self.stop_prob = 0.0
+    self._x_interp = np.zeros(N+1, dtype=np.float64)
+    self._stopline = np.zeros(N+1, dtype=np.float64)
+    self._x_obstacle = np.zeros(N+1, dtype=np.float64)
+    self._x_obstacles = np.zeros((N+1, 4), dtype=np.float64)
+    self._lead_0_xv = np.zeros((N+1, 2), dtype=np.float64)
+    self._lead_1_xv = np.zeros((N+1, 2), dtype=np.float64)
+    self._lead_accel_tmp = np.zeros(N+1, dtype=np.float64)
+    self._lead_v_tmp = np.zeros(N+1, dtype=np.float64)
+    self._lead_x_tmp = np.zeros(N+1, dtype=np.float64)
+    self._lead_0_obstacle_tmp = np.zeros(N+1, dtype=np.float64)
+    self._lead_1_obstacle_tmp = np.zeros(N+1, dtype=np.float64)
+    self._v_lower = np.zeros(N+1, dtype=np.float64)
+    self._v_upper = np.zeros(N+1, dtype=np.float64)
+    self._v_cruise_clipped = np.zeros(N+1, dtype=np.float64)
+    self._cruise_obstacle_tmp = np.zeros(N+1, dtype=np.float64)
+    self._safe_obstacle_tmp = np.zeros(N+1, dtype=np.float64)
+    self._safe_obstacle_react_tmp = np.zeros(N+1, dtype=np.float64)
+    self._x_obstacles_min = np.zeros(N+1, dtype=np.float64)
 
     self.on_stopping = False
     self.on_stopping_timer = 0
@@ -259,9 +281,14 @@ class LongitudinalMpc:
     self.time_linearization = 0.0
     self.time_integrator = 0.0
     self.x0 = np.zeros(X_DIM)
+    self._last_weight_key = None
     self.set_weights()
 
   def set_weights(self, prev_accel_constraint=True):
+    weight_key = (self.e2e, bool(prev_accel_constraint))
+    if weight_key == self._last_weight_key:
+      return
+
     if self.e2e:
       self.set_weights_for_xva_policy()
       self.params[:,0] = -10.
@@ -269,6 +296,7 @@ class LongitudinalMpc:
       self.params[:,2] = 1e5
     else:
       self.set_weights_for_lead_policy(prev_accel_constraint)
+    self._last_weight_key = weight_key
 
   def set_weights_for_lead_policy(self, prev_accel_constraint=True):
     a_change_cost = A_CHANGE_COST if prev_accel_constraint else 0
@@ -305,15 +333,22 @@ class LongitudinalMpc:
       for i in range(0, N+1):
         self.solver.set(i, 'x', self.x0)
 
-  @staticmethod
-  def extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau):
-    a_lead_traj = a_lead * np.exp(-a_lead_tau * (T_IDXS**2)/2.)
-    v_lead_traj = np.clip(v_lead + np.cumsum(T_DIFFS * a_lead_traj), 0.0, 1e8)
-    x_lead_traj = x_lead + np.cumsum(T_DIFFS * v_lead_traj)
-    lead_xv = np.column_stack((x_lead_traj, v_lead_traj))
-    return lead_xv
+  def extrapolate_lead(self, x_lead, v_lead, a_lead, a_lead_tau, out):
+    np.multiply(T_IDXS_SQ, -a_lead_tau / 2., out=self._lead_accel_tmp)
+    np.exp(self._lead_accel_tmp, out=self._lead_accel_tmp)
+    self._lead_accel_tmp *= a_lead
+    np.multiply(T_DIFFS, self._lead_accel_tmp, out=self._lead_v_tmp)
+    np.cumsum(self._lead_v_tmp, out=self._lead_v_tmp)
+    self._lead_v_tmp += v_lead
+    np.clip(self._lead_v_tmp, 0.0, 1e8, out=self._lead_v_tmp)
+    np.multiply(T_DIFFS, self._lead_v_tmp, out=self._lead_x_tmp)
+    np.cumsum(self._lead_x_tmp, out=self._lead_x_tmp)
+    self._lead_x_tmp += x_lead
+    out[:,0] = self._lead_x_tmp
+    out[:,1] = self._lead_v_tmp
+    return out
 
-  def process_lead(self, lead):
+  def process_lead(self, lead, out):
     v_ego = self.x0[1]
     if lead is not None and lead.status:
       x_lead = lead.dRel
@@ -333,7 +368,7 @@ class LongitudinalMpc:
     x_lead = clip(x_lead, min_x_lead, 1e8)
     v_lead = clip(v_lead, 0.0, 1e8)
     a_lead = clip(a_lead, -10., 5.)
-    lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
+    lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau, out)
     return lead_xv
 
   def set_accel_limits(self, min_a, max_a):
@@ -353,19 +388,21 @@ class LongitudinalMpc:
     self.lo_timer += 1
     if self.lo_timer > 200:
       self.lo_timer = 0
-      self.e2e = Params().get_bool("E2ELong")
-      self.dynamic_TR_mode = int(Params().get("DynamicTRGap", encoding="utf8"))
-      self.custom_tr_enabled = Params().get_bool("CustomTREnabled")
+      self.e2e = self.params_reader.get_bool("E2ELong")
+      self.dynamic_TR_mode = int(self.params_reader.get("DynamicTRGap", encoding="utf8"))
+      self.custom_tr_enabled = self.params_reader.get_bool("CustomTREnabled")
 
-    xforward = ((v[1:] + v[:-1]) / 2) * (T_IDXS[1:] - T_IDXS[:-1])
-    x = np.cumsum(np.insert(xforward, 0, x[0]))
+    self._x_interp[0] = x[0]
+    self._x_interp[1:] = ((v[1:] + v[:-1]) / 2) * (T_IDXS[1:] - T_IDXS[:-1])
+    np.cumsum(self._x_interp, out=self._x_interp)
+    x = self._x_interp
     self.yref[:,1] = x
     self.yref[:,2] = v
     self.yref[:,3] = a
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
 
-    lead_xv_0 = self.process_lead(radarstate.leadOne)
-    lead_xv_1 = self.process_lead(radarstate.leadTwo)
+    lead_xv_0 = self.process_lead(radarstate.leadOne, self._lead_0_xv)
+    lead_xv_1 = self.process_lead(radarstate.leadTwo, self._lead_1_xv)
 
     if self.custom_tr_enabled:
       cruise_gap = int(clip(carstate.cruiseGapSet, 1., 4.))
@@ -392,58 +429,112 @@ class LongitudinalMpc:
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+    lead_0_obstacle = self._lead_0_obstacle_tmp
+    np.multiply(lead_xv_0[:,1], lead_xv_0[:,1], out=lead_0_obstacle)
+    lead_0_obstacle /= (2 * COMFORT_BRAKE)
+    np.add(lead_xv_0[:,0], lead_0_obstacle, out=lead_0_obstacle)
+    lead_1_obstacle = self._lead_1_obstacle_tmp
+    np.multiply(lead_xv_1[:,1], lead_xv_1[:,1], out=lead_1_obstacle)
+    lead_1_obstacle /= (2 * COMFORT_BRAKE)
+    np.add(lead_xv_1[:,0], lead_1_obstacle, out=lead_1_obstacle)
 
-    v_lower = v_ego + (T_IDXS * self.cruise_min_a * 1.05)
-    v_upper = v_ego + (T_IDXS * self.cruise_max_a * 1.05)
-    v_cruise_clipped = np.clip(v_cruise * np.ones(N+1),
-                               v_lower,
-                               v_upper)
-    cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, self.desired_TR)
+    v_lower = self._v_lower
+    np.multiply(T_IDXS, self.cruise_min_a, out=v_lower)
+    v_lower *= 1.05
+    np.add(v_ego, v_lower, out=v_lower)
+    v_upper = self._v_upper
+    np.multiply(T_IDXS, self.cruise_max_a, out=v_upper)
+    v_upper *= 1.05
+    np.add(v_ego, v_upper, out=v_upper)
+    v_cruise_clipped = self._v_cruise_clipped
+    np.clip(v_cruise, v_lower, v_upper, out=v_cruise_clipped)
+    cruise_obstacle = self._cruise_obstacle_tmp
+    np.multiply(T_DIFFS, v_cruise_clipped, out=cruise_obstacle)
+    np.cumsum(cruise_obstacle, out=cruise_obstacle)
+    safe_obstacle = self._safe_obstacle_tmp
+    np.multiply(v_cruise_clipped, v_cruise_clipped, out=safe_obstacle)
+    safe_obstacle /= (2 * COMFORT_BRAKE)
+    np.multiply(v_cruise_clipped, self.desired_TR, out=self._safe_obstacle_react_tmp)
+    safe_obstacle += self._safe_obstacle_react_tmp
+    safe_obstacle += STOP_DISTANCE
+    cruise_obstacle += safe_obstacle
 
-    stopline = (model.stopLine.x + 5.0) * np.ones(N+1) if stopping else 400 * np.ones(N+1)
-    x = (x[N] + 5.0) * np.ones(N+1)
+    stopline = self._stopline
+    stopline.fill(model.stopLine.x + 5.0 if stopping else 400)
+    x_obstacle = self._x_obstacle
+    x_obstacle.fill(x[N] + 5.0)
 
     if self.status and not self.on_stopping:
-      x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
-    elif x[N] > 30 and stopline[N] < 30 and self.v_ego < 6.0:
+      self._x_obstacles[:,0] = lead_0_obstacle
+      self._x_obstacles[:,1] = lead_1_obstacle
+      self._x_obstacles[:,2] = cruise_obstacle
+      x_obstacles = self._x_obstacles[:,:3]
+    elif x_obstacle[N] > 30 and stopline[N] < 30 and self.v_ego < 6.0:
       self.on_stopping = False
-      x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle, x])
-    elif x[N] < 100 and stopline[N] < 100:
+      self._x_obstacles[:,0] = lead_0_obstacle
+      self._x_obstacles[:,1] = lead_1_obstacle
+      self._x_obstacles[:,2] = cruise_obstacle
+      self._x_obstacles[:,3] = x_obstacle
+      x_obstacles = self._x_obstacles
+    elif x_obstacle[N] < 100 and stopline[N] < 100:
       self.on_stopping = True
       self.on_stopping_timer = 0
-      x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle*2, (stopline*0.2)+(x*0.7)])
-    elif x[N] < 100 and self.on_stopping:
+      self._x_obstacles[:,0] = lead_0_obstacle
+      self._x_obstacles[:,1] = lead_1_obstacle
+      self._x_obstacles[:,2] = cruise_obstacle
+      self._x_obstacles[:,2] *= 2
+      self._x_obstacles[:,3] = stopline
+      self._x_obstacles[:,3] *= 0.2
+      self._x_obstacles[:,3] += x_obstacle * 0.7
+      x_obstacles = self._x_obstacles
+    elif x_obstacle[N] < 100 and self.on_stopping:
       self.on_stopping_timer = 0
-      x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle*2, x])
-    elif x[N] >= 100 and self.on_stopping:
+      self._x_obstacles[:,0] = lead_0_obstacle
+      self._x_obstacles[:,1] = lead_1_obstacle
+      self._x_obstacles[:,2] = cruise_obstacle
+      self._x_obstacles[:,2] *= 2
+      self._x_obstacles[:,3] = x_obstacle
+      x_obstacles = self._x_obstacles
+    elif x_obstacle[N] >= 100 and self.on_stopping:
       self.on_stopping_timer += 1
       if self.on_stopping_timer < 300:
-        x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle*2, x])
+        self._x_obstacles[:,0] = lead_0_obstacle
+        self._x_obstacles[:,1] = lead_1_obstacle
+        self._x_obstacles[:,2] = cruise_obstacle
+        self._x_obstacles[:,2] *= 2
+        self._x_obstacles[:,3] = x_obstacle
+        x_obstacles = self._x_obstacles
       else:
         self.on_stopping = False
         self.on_stopping_timer = 0
-        x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
+        self._x_obstacles[:,0] = lead_0_obstacle
+        self._x_obstacles[:,1] = lead_1_obstacle
+        self._x_obstacles[:,2] = cruise_obstacle
+        x_obstacles = self._x_obstacles[:,:3]
     else:
       self.on_stopping = False
       self.on_stopping_timer = 0
-      x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
+      self._x_obstacles[:,0] = lead_0_obstacle
+      self._x_obstacles[:,1] = lead_1_obstacle
+      self._x_obstacles[:,2] = cruise_obstacle
+      x_obstacles = self._x_obstacles[:,:3]
 
     self.source = SOURCES[np.argmin(x_obstacles[N])]
-    self.params[:,2] = np.min(x_obstacles, axis=1)
-    self.params[:,3] = np.copy(self.prev_a)
+    x_obstacles_min = self._x_obstacles_min
+    np.min(x_obstacles, axis=1, out=x_obstacles_min)
+    self.params[:,2] = x_obstacles_min
+    self.params[:,3] = self.prev_a
     self.params[:,4] = self.desired_TR  # shane
 
-    self.e2e_x = x[:]
-    self.lead_0_obstacle = lead_0_obstacle[:]
-    self.lead_1_obstacle = lead_1_obstacle[:]
-    self.cruise_target = cruise_obstacle[:]
-    self.stopline = stopline[:]
+    self.e2e_x[:] = x_obstacle
+    self.lead_0_obstacle[:] = lead_0_obstacle
+    self.lead_1_obstacle[:] = lead_1_obstacle
+    self.cruise_target[:] = cruise_obstacle
+    self.stopline[:] = stopline
     self.stop_prob = model.stopLine.prob
 
     if self.e2e:
-      self.yref[:,1] = np.min(x_obstacles, axis=1)
+      self.yref[:,1] = x_obstacles_min
       for i in range(N):
         self.solver.set(i, "yref", self.yref[i])
       self.solver.set(N, "yref", self.yref[N][:COST_E_DIM])
@@ -459,15 +550,16 @@ class LongitudinalMpc:
     # v, and a are in local frame, but x is wrt the x[0] position
     # In >90degree turns, x goes to 0 (and may even be -ve)
     # So, we use integral(v) + x[0] to obtain the forward-distance
-    xforward = ((v[1:] + v[:-1]) / 2) * (T_IDXS[1:] - T_IDXS[:-1])
-    x = np.cumsum(np.insert(xforward, 0, x[0]))
-    self.yref[:,1] = x
+    self._x_interp[0] = x[0]
+    self._x_interp[1:] = ((v[1:] + v[:-1]) / 2) * (T_IDXS[1:] - T_IDXS[:-1])
+    np.cumsum(self._x_interp, out=self._x_interp)
+    self.yref[:,1] = self._x_interp
     self.yref[:,2] = v
     self.yref[:,3] = a
     for i in range(N):
       self.solver.cost_set(i, "yref", self.yref[i])
     self.solver.cost_set(N, "yref", self.yref[N][:COST_E_DIM])
-    self.params[:,3] = np.copy(self.prev_a)
+    self.params[:,3] = self.prev_a
     self.run()
 
   def run(self):
@@ -480,9 +572,6 @@ class LongitudinalMpc:
 
     self.solution_status = self.solver.solve()
     self.solve_time = float(self.solver.get_stats('time_tot')[0])
-    self.time_qp_solution = float(self.solver.get_stats('time_qp')[0])
-    self.time_linearization = float(self.solver.get_stats('time_lin')[0])
-    self.time_integrator = float(self.solver.get_stats('time_sim')[0])
 
     # qp_iter = self.solver.get_stats('statistics')[-1][-1] # SQP_RTI specific
     # print(f"long_mpc timings: tot {self.solve_time:.2e}, qp {self.time_qp_solution:.2e}, lin {self.time_linearization:.2e}, integrator {self.time_integrator:.2e}, qp_iter {qp_iter}")
@@ -499,7 +588,7 @@ class LongitudinalMpc:
     self.a_solution = self.x_sol[:,2]
     self.j_solution = self.u_sol[:,0]
 
-    self.prev_a = np.interp(T_IDXS + 0.05, T_IDXS, self.a_solution)
+    self.prev_a[:] = np.interp(T_IDXS_PLUS_0_05, T_IDXS, self.a_solution)
 
     t = sec_since_boot()
     if self.solution_status != 0:

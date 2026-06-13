@@ -23,6 +23,10 @@ from decimal import Decimal
 
 
 FRICTION_THRESHOLD = 0.2
+ACTUAL_CURVATURE_BP = (2.0, 5.0)
+LOW_SPEED_FACTOR_BP = (0.0, 10.0, 20.0)
+LOW_SPEED_FACTOR_V = (500.0, 500.0, 200.0)
+FRICTION_BP = (-FRICTION_THRESHOLD, FRICTION_THRESHOLD)
 
 
 class LatControlTorque(LatControl):
@@ -81,17 +85,18 @@ class LatControlTorque(LatControl):
       else:
         actual_curvature_vm = -VM.calc_curvature(math.radians(CS.steeringAngleDeg - params.angleOffsetDeg), CS.vEgo, params.roll)
         actual_curvature_llk = llk.angularVelocityCalibrated.value[2] / CS.vEgo
-        actual_curvature = interp(CS.vEgo, [2.0, 5.0], [actual_curvature_vm, actual_curvature_llk])
+        actual_curvature = interp(CS.vEgo, ACTUAL_CURVATURE_BP, (actual_curvature_vm, actual_curvature_llk))
         curvature_deadzone = 0.0
-      desired_lateral_accel = desired_curvature * CS.vEgo ** 2
+      v_ego_sq = CS.vEgo ** 2
+      desired_lateral_accel = desired_curvature * v_ego_sq
 
       # desired rate is the desired rate of change in the setpoint, not the absolute desired curvature
       #desired_lateral_jerk = desired_curvature_rate * CS.vEgo ** 2
-      actual_lateral_accel = actual_curvature * CS.vEgo ** 2
-      lateral_accel_deadzone = curvature_deadzone * CS.vEgo ** 2
+      actual_lateral_accel = actual_curvature * v_ego_sq
+      lateral_accel_deadzone = curvature_deadzone * v_ego_sq
 
 
-      low_speed_factor = interp(CS.vEgo, [0, 10, 20], [500, 500, 200])
+      low_speed_factor = interp(CS.vEgo, LOW_SPEED_FACTOR_BP, LOW_SPEED_FACTOR_V)
       setpoint = desired_lateral_accel + low_speed_factor * desired_curvature
       measurement = actual_lateral_accel + low_speed_factor * actual_curvature
       error = setpoint - measurement
@@ -99,7 +104,7 @@ class LatControlTorque(LatControl):
 
       ff = desired_lateral_accel - params.roll * ACCELERATION_DUE_TO_GRAVITY
       # convert friction into lateral accel units for feedforward
-      friction_compensation = interp(apply_deadzone(error, lateral_accel_deadzone), [-FRICTION_THRESHOLD, FRICTION_THRESHOLD], [-self.friction, self.friction])
+      friction_compensation = interp(apply_deadzone(error, lateral_accel_deadzone), FRICTION_BP, (-self.friction, self.friction))
       ff += friction_compensation / self.kf
       freeze_integrator = CS.steeringRateLimited or CS.steeringPressed or CS.vEgo < 5
       output_torque = self.pid.update(error,

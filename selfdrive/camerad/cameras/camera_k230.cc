@@ -21,12 +21,13 @@ ExitHandler do_exit;
 namespace {
 
 constexpr unsigned K230_DEFAULT_WIDTH = 512;
-constexpr unsigned K230_DEFAULT_HEIGHT = 288;
+constexpr unsigned K230_DEFAULT_HEIGHT = 256;
 constexpr unsigned K230_DEFAULT_SENSOR_WIDTH = 1920;
 constexpr unsigned K230_DEFAULT_SENSOR_HEIGHT = 1080;
 constexpr int K230_DEFAULT_TIMEOUT_MS = 1000;
 constexpr int K230_DEFAULT_VIPC_BUFFERS = 40;
 constexpr int K230_DEFAULT_V4L2_BUFFERS = 5;
+constexpr uint64_t K230_MODEL_CAMERA_PERIOD_NS = 50000000ULL;
 
 struct K230CameraConfig {
   int device = -1;
@@ -44,7 +45,7 @@ struct K230CameraConfig {
 K230CameraConfig read_config() {
   K230CameraConfig cfg = {};
 
-  if (!k230_vvcam::wait_for_ready()) {
+  if (!k230_vvcam::wait_for_ready(k230_vvcam::kReadyTimeoutMs, 2)) {
     throw std::runtime_error("K230 vvcam daemon/video nodes not ready");
   }
   const int video00 = k230_vvcam::detect_vvcam_video00();
@@ -140,6 +141,7 @@ void run_k230_camerad() {
 
   uint32_t frame_id = 0;
   uint32_t error_count = 0;
+  uint64_t next_publish_ns = 0;
   while (!do_exit) {
     const uint64_t ts_sof = nanos_since_boot();
     if (v4l2_drm_dump(&capture.ctx, cfg.timeout_ms) != 0) {
@@ -150,6 +152,11 @@ void run_k230_camerad() {
     }
 
     const uint64_t ts_eof = nanos_since_boot();
+    if (next_publish_ns != 0 && ts_eof < next_publish_ns) {
+      v4l2_drm_dump_release(&capture.ctx);
+      continue;
+    }
+
     const auto *src = static_cast<const uint8_t *>(capture.ctx.buffers[capture.ctx.vbuffer.index].mmap);
     if (src == nullptr) {
       v4l2_drm_dump_release(&capture.ctx);
@@ -183,6 +190,11 @@ void run_k230_camerad() {
     pm.send("roadCameraState", msg);
 
     ++frame_id;
+    if (next_publish_ns == 0 || ts_eof >= next_publish_ns + K230_MODEL_CAMERA_PERIOD_NS) {
+      next_publish_ns = ts_eof + K230_MODEL_CAMERA_PERIOD_NS;
+    } else {
+      next_publish_ns += K230_MODEL_CAMERA_PERIOD_NS;
+    }
   }
 }
 

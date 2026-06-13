@@ -85,15 +85,39 @@ inline int detect_vvcam_video00() {
   return -1;
 }
 
-inline bool wait_for_ready(int timeout_ms = kReadyTimeoutMs) {
+inline bool video_capture_ready(int device) {
+  const std::string dev_path = util::string_format("/dev/video%d", device);
+  int fd = HANDLE_EINTR(open(dev_path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC));
+  if (fd < 0) return false;
+
+  v4l2_format format = {};
+  format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+  const bool ready = HANDLE_EINTR(ioctl(fd, VIDIOC_G_FMT, &format)) == 0;
+  close(fd);
+  return ready;
+}
+
+inline bool vvcam_ready(int required_nodes = 1) {
+  if (!isp_daemon_ready()) return false;
+
+  const int video00 = detect_vvcam_video00();
+  if (video00 < 0) return false;
+
+  for (int i = 0; i < required_nodes; ++i) {
+    if (!video_capture_ready(video00 + i)) return false;
+  }
+  return true;
+}
+
+inline bool wait_for_ready(int timeout_ms = kReadyTimeoutMs, int required_nodes = 1) {
   const int attempts = std::max(1, timeout_ms / kReadyPollMs);
   for (int i = 0; i < attempts; ++i) {
-    if (isp_daemon_ready() && detect_vvcam_video00() >= 0) {
+    if (vvcam_ready(required_nodes)) {
       return true;
     }
     util::sleep_for(kReadyPollMs);
   }
-  return isp_daemon_ready() && detect_vvcam_video00() >= 0;
+  return vvcam_ready(required_nodes);
 }
 
 class SetupLock {

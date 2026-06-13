@@ -121,12 +121,18 @@ def gen_lat_ocp():
 class LateralMpc():
   def __init__(self, x0=np.zeros(X_DIM)):
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
+    self._last_weight_key = None
     self.reset(x0)
 
   def reset(self, x0=np.zeros(X_DIM)):
+    self._last_weight_key = None
     self.x_sol = np.zeros((N+1, X_DIM))
     self.u_sol = np.zeros((N, 1))
     self.yref = np.zeros((N+1, 3))
+    self.yref_heading = self.yref[:, 1]
+    self.yref_curv_rate = self.yref[:, 2]
+    self.x0_cp = np.zeros(X_DIM)
+    self.p_cp = np.zeros(P_DIM)
     for i in range(N):
       self.solver.cost_set(i, "yref", self.yref[i])
     self.solver.cost_set(N, "yref", self.yref[N][:2])
@@ -143,36 +149,39 @@ class LateralMpc():
     self.cost = 0
 
   def set_weights(self, path_weight, heading_weight, steer_rate_weight):
+    weight_key = (path_weight, heading_weight, steer_rate_weight)
+    if weight_key == self._last_weight_key:
+      return
+
     W = np.asfortranarray(np.diag([path_weight, heading_weight, steer_rate_weight]))
     for i in range(N):
       self.solver.cost_set(i, 'W', W)
     #TODO hacky weights to keep behavior the same
     self.solver.cost_set(N, 'W', (3/20.)*W[:2,:2])
+    self._last_weight_key = weight_key
 
   def run(self, x0, p, y_pts, heading_pts, curv_rate_pts):
-    x0_cp = np.copy(x0)
-    p_cp = np.copy(p)
-    self.solver.constraints_set(0, "lbx", x0_cp)
-    self.solver.constraints_set(0, "ubx", x0_cp)
+    self.x0_cp[:] = x0
+    self.p_cp[:] = p
+    self.solver.constraints_set(0, "lbx", self.x0_cp)
+    self.solver.constraints_set(0, "ubx", self.x0_cp)
     self.yref[:,0] = y_pts
-    v_ego = p_cp[0]
-    # rotation_radius = p_cp[1]
-    self.yref[:,1] = heading_pts*(v_ego+5.0)
-    self.yref[:,2] = curv_rate_pts * (v_ego+5.0) * 4.0
-    for i in range(N):
-      self.solver.cost_set(i, "yref", self.yref[i])
-      self.solver.set(i, "p", p_cp)
-    self.solver.set(N, "p", p_cp)
+    v_ego = self.p_cp[0]
+    # rotation_radius = self.p_cp[1]
+    v_ego_cost = v_ego + 5.0
+    np.multiply(heading_pts, v_ego_cost, out=self.yref_heading)
+    np.multiply(curv_rate_pts, v_ego_cost, out=self.yref_curv_rate)
+    self.yref_curv_rate *= 4.0
+    self.solver.cost_set_many("yref", self.yref[:N], 0, N)
+    self.solver.set_params_many(self.p_cp, 0, N + 1)
     self.solver.cost_set(N, "yref", self.yref[N][:2])
 
     t = sec_since_boot()
     self.solution_status = self.solver.solve()
     self.solve_time = sec_since_boot() - t
 
-    for i in range(N+1):
-      self.x_sol[i] = self.solver.get(i, 'x')
-    for i in range(N):
-      self.u_sol[i] = self.solver.get(i, 'u')
+    self.solver.get_many('x', self.x_sol, 0, N + 1)
+    self.solver.get_many('u', self.u_sol, 0, N)
     self.cost = self.solver.get_cost()
 
 

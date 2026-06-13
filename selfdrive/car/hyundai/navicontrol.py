@@ -18,7 +18,8 @@ LaneChangeState = log.LateralPlan.LaneChangeState
 class NaviControl():
   def __init__(self):
 
-    self.sm = messaging.SubMaster(['liveNaviData', 'liveENaviData', 'lateralPlan', 'radarState', 'controlsState', 'liveMapData'])
+    self.sm = messaging.SubMaster(['liveNaviData', 'liveENaviData', 'lateralPlan', 'longitudinalPlan',
+                                   'radarState', 'controlsState', 'liveMapData'])
 
     self.btn_cnt = 0
     self.seq_command = 0
@@ -426,7 +427,6 @@ class NaviControl():
     return cruise_set_speed_kph
 
   def auto_speed_control(self, CS, navi_speed, path_plan):
-    self.sm.update(0)
     modelSpeed = path_plan.modelSpeed
     min_control_speed = 20 if CS.is_set_speed_in_mph else 30
     var_speed = navi_speed
@@ -545,8 +545,9 @@ class NaviControl():
 
     return round(min(var_speed, v_curv_speed, o_curv_speed))
 
-  def update(self, CS, path_plan):
-    self.sm.update(0)
+  def update(self, CS, path_plan, update_messages=True):
+    if update_messages:
+      self.sm.update(0)
     self.na_timer += 1
     if self.na_timer > 100:
       self.na_timer = 0

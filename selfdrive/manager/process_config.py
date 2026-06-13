@@ -10,13 +10,11 @@ K230 = os.getenv("OPENPILOT_TARGET_ARCH") == "riscv64" or os.uname().machine == 
 
 EnableLogger = Params().get_bool('OpkrEnableLogger')
 EnableUploader = Params().get_bool('OpkrEnableUploader')
-EnableOSM = Params().get_bool('OSMEnable') or Params().get_bool('OSMSpeedLimitEnable') or Params().get("CurvDecelOption", encoding="utf8") == "1" or Params().get("CurvDecelOption", encoding="utf8") == "3"
-EnableMapbox = Params().get_bool('MapboxEnabled')
 EnableShutdownD = Params().get_bool('C2WithCommaPower')
 EnableRTShield = Params().get_bool('RTShield')
-EnableExternalNavi = Params().get("OPKRNaviSelect", encoding="utf8") == "4" or Params().get("OPKRNaviSelect", encoding="utf8") == "5"
 EnableDriverMonitoring = not K230 and (not PC or WEBCAM)
 EnableWebUI = os.getenv("K230_WEBUI", "1" if K230 else "0") != "0"
+EnableRadard = os.getenv("K230_LATERAL_ONLY") != "1"
 
 procs = [
   DaemonProcess("manage_athenad", "selfdrive.athena.manage_athenad", "AthenadPid"),
@@ -44,7 +42,7 @@ procs = [
   PythonProcess("pandad", "selfdrive.boardd.pandad", persistent=True),
   PythonProcess("paramsd", "selfdrive.locationd.paramsd"),
   PythonProcess("plannerd", "selfdrive.controls.plannerd"),
-  PythonProcess("radard", "selfdrive.controls.radard"),
+  PythonProcess("radard", "selfdrive.controls.radard", enabled=EnableRadard),
   PythonProcess("thermald", "selfdrive.thermald.thermald", persistent=True),
   PythonProcess("timezoned", "selfdrive.timezoned", enabled=TICI, persistent=True),
   PythonProcess("webuid", "selfdrive.webui.webuid", enabled=EnableWebUI, persistent=True),
@@ -52,7 +50,6 @@ procs = [
   #PythonProcess("updated", "selfdrive.updated", enabled=not PC, persistent=True),
   #PythonProcess("uploader", "selfdrive.loggerd.uploader", persistent=True),
   #PythonProcess("statsd", "selfdrive.statsd", persistent=True),
-  #PythonProcess("mapd", "selfdrive.mapd.mapd", enabled=not PC, persistent=True),
   # EON only
   #PythonProcess("rtshield", "selfdrive.rtshield", enabled=EON),
   #PythonProcess("shutdownd", "selfdrive.hardware.eon.shutdownd", enabled=EON),
@@ -75,15 +72,6 @@ if EnableUploader:
     PythonProcess("deleter", "selfdrive.loggerd.deleter", persistent=True),
     PythonProcess("uploader", "selfdrive.loggerd.uploader", persistent=True),
   ]
-if EnableOSM:
-  procs += [
-    PythonProcess("mapd", "selfdrive.mapd.mapd", enabled=not PC, persistent=True),
-  ]
-if EnableMapbox:
-  procs += [
-    PythonProcess("gpxd", "selfdrive.dragonpilot.gpxd"),
-    PythonProcess("otisserv", "selfdrive.dragonpilot.otisserv", persistent=True),
-  ]
 if EnableShutdownD:
   procs += [
     PythonProcess("shutdownd", "selfdrive.hardware.eon.shutdownd", enabled=EON),
@@ -92,9 +80,4 @@ if EnableRTShield:
   procs += [
     PythonProcess("rtshield", "selfdrive.rtshield", enabled=EON),
   ]
-if EnableExternalNavi:
-  procs += [
-    PythonProcess("navid", "selfdrive.navi.navi_external", persistent=True),
-  ]
-
 managed_processes = {p.name: p for p in procs}

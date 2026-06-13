@@ -17,7 +17,7 @@ from selfdrive.hardware import HARDWARE, PC, EON
 from selfdrive.hardware.eon.apk import (pm_apply_packages, update_apks)
 from selfdrive.manager.helpers import unblock_stdout
 from selfdrive.manager.process import ensure_running
-from selfdrive.manager.process_config import managed_processes
+from selfdrive.manager.process_config import K230, managed_processes
 from selfdrive.athena.registration import register, UNREGISTERED_DONGLE_ID
 from selfdrive.swaglog import cloudlog, add_file_handler
 from selfdrive.version import is_dirty, get_commit, get_version, get_origin, get_short_branch, \
@@ -353,7 +353,8 @@ def manager_thread() -> None:
     ignore += ["manage_athenad", "uploader"]
   if os.getenv("NOBOARD") is not None:
     ignore.append("pandad")
-  if os.getenv("K230_PREVIEW") == "1":
+  k230_preview = K230 and os.getenv("K230_PREVIEW", "1") != "0"
+  if k230_preview:
     ignore.append("ui")
   ignore += [x for x in os.getenv("BLOCK", "").split(",") if len(x) > 0]
 
@@ -413,7 +414,8 @@ def main() -> None:
   if prepare_only:
     return
   
-  if "ui" not in os.getenv("BLOCK", "").split(",") and os.getenv("K230_PREVIEW") != "1":
+  k230_preview = K230 and os.getenv("K230_PREVIEW", "1") != "0"
+  if "ui" not in os.getenv("BLOCK", "").split(",") and not k230_preview:
     managed_processes['ui'].start()
 
   # SystemExit on sigterm

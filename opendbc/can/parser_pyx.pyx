@@ -9,7 +9,7 @@ from libcpp cimport bool
 from libcpp.map cimport map
 
 from .common cimport CANParser as cpp_CANParser
-from .common cimport SignalParseOptions, MessageParseOptions, dbc_lookup, SignalValue, DBC
+from .common cimport SignalParseOptions, MessageParseOptions, dbc_lookup, SignalValue, DBC, update_string_parsers
 
 import os
 import numbers
@@ -25,6 +25,8 @@ cdef class CANParser:
     map[string, uint32_t] msg_name_to_address
     map[uint32_t, string] address_to_msg_name
     vector[SignalValue] can_values
+    list vl_all_unique
+    bool track_all
 
   cdef readonly:
     dict vl
@@ -34,7 +36,7 @@ cdef class CANParser:
     string dbc_name
     int can_invalid_cnt
 
-  def __init__(self, dbc_name, signals, checks=None, bus=0, enforce_checks=True):
+  def __init__(self, dbc_name, signals, checks=None, bus=0, enforce_checks=True, track_all=True):
     if checks is None:
       checks = []
 
@@ -45,6 +47,8 @@ cdef class CANParser:
 
     self.vl = {}
     self.vl_all = {}
+    self.vl_all_unique = []
+    self.track_all = track_all
     self.can_valid = False
     self.can_invalid_cnt = CAN_INVALID_CNT
 
@@ -60,6 +64,7 @@ cdef class CANParser:
       self.vl[name] = self.vl[msg.address]
       self.vl_all[msg.address] = defaultdict(list)
       self.vl_all[name] = self.vl_all[msg.address]
+      self.vl_all_unique.append(self.vl_all[msg.address])
 
     # Convert message names into addresses
     for i in range(len(signals)):
@@ -101,45 +106,116 @@ cdef class CANParser:
       mpo.check_frequency = freq
       message_options_v.push_back(mpo)
 
-    self.can = new cpp_CANParser(bus, dbc_name, message_options_v, signal_options_v)
+    self.can = new cpp_CANParser(bus, dbc_name, message_options_v, signal_options_v, self.track_all)
     self.update_vl()
 
-  cdef unordered_set[uint32_t] update_vl(self):
-    cdef unordered_set[uint32_t] updated_addrs
-
-    # Update invalid flag
+  cdef void update_valid(self):
     self.can_invalid_cnt += 1
     if self.can.can_valid:
       self.can_invalid_cnt = 0
     self.can_valid = self.can_invalid_cnt < CAN_INVALID_CNT
     self.bus_timeout = self.can.bus_timeout
 
-    new_vals = self.can.query_latest()
+  cdef unordered_set[uint32_t] update_values(self, bool updated_only=False):
+    cdef unordered_set[uint32_t] updated_addrs
+
+    new_vals = self.can.query_updated() if updated_only else self.can.query_latest()
     for cv in new_vals:
       # Cast char * directly to unicode
       cv_name = <unicode>cv.name
       self.vl[cv.address][cv_name] = cv.value
-      self.vl_all[cv.address][cv_name].extend(cv.all_values)
+      if self.track_all:
+        self.vl_all[cv.address][cv_name].extend(cv.all_values)
       updated_addrs.insert(cv.address)
 
     return updated_addrs
 
+  cdef void update_values_no_return(self, bool updated_only=False):
+    new_vals = self.can.query_updated() if updated_only else self.can.query_latest()
+    for cv in new_vals:
+      cv_name = <unicode>cv.name
+      self.vl[cv.address][cv_name] = cv.value
+      if self.track_all:
+        self.vl_all[cv.address][cv_name].extend(cv.all_values)
+
+  cdef unordered_set[uint32_t] update_vl(self):
+    self.update_valid()
+    return self.update_values()
+
   def update_string(self, dat, sendcan=False):
-    for v in self.vl_all.values():
-      v.clear()
+    if self.track_all:
+      for v in self.vl_all_unique:
+        v.clear()
 
     self.can.update_string(dat, sendcan)
-    return self.update_vl()
+    self.update_valid()
+    return self.update_values()
 
   def update_strings(self, strings, sendcan=False):
-    for v in self.vl_all.values():
-      v.clear()
+    if self.track_all:
+      for v in self.vl_all_unique:
+        v.clear()
 
-    updated_addrs = set()
     for s in strings:
       self.can.update_string(s, sendcan)
-      updated_addrs.update(self.update_vl())
-    return updated_addrs
+      self.update_valid()
+    return self.update_values(True)
+
+
+def update_can_parsers(parsers, strings, sendcan=False, return_updated=True):
+  cdef CANParser parser
+  cdef vector[cpp_CANParser *] cpp_parsers
+  parser_list = list(parsers)
+
+  for parser in parser_list:
+    if parser.track_all:
+      for v in parser.vl_all_unique:
+        v.clear()
+    cpp_parsers.push_back(parser.can)
+
+  for s in strings:
+    update_string_parsers(cpp_parsers, s, sendcan)
+    for parser in parser_list:
+      parser.can.UpdateValid(parser.can.last_sec)
+      parser.update_valid()
+
+  if return_updated:
+    return [parser.update_values(True) for parser in parser_list]
+
+  for parser in parser_list:
+    parser.update_values_no_return(True)
+
+
+cdef class CANParserGroup:
+  cdef:
+    vector[cpp_CANParser *] cpp_parsers
+    list parsers
+
+  def __init__(self, parsers):
+    cdef CANParser parser
+    self.parsers = list(parsers)
+    for parser in self.parsers:
+      self.cpp_parsers.push_back(parser.can)
+
+  def update_strings(self, strings, sendcan=False, return_updated=True):
+    cdef CANParser parser
+
+    for parser in self.parsers:
+      if parser.track_all:
+        for v in parser.vl_all_unique:
+          v.clear()
+
+    for s in strings:
+      update_string_parsers(self.cpp_parsers, s, sendcan)
+      for parser in self.parsers:
+        parser.can.UpdateValid(parser.can.last_sec)
+        parser.update_valid()
+
+    if return_updated:
+      return [parser.update_values(True) for parser in self.parsers]
+
+    for parser in self.parsers:
+      parser.update_values_no_return(True)
 
 
 cdef class CANDefine():

@@ -146,6 +146,7 @@ class SubMaster:
                ignore_alive: Optional[List[str]] = None, ignore_avg_freq: Optional[List[str]] = None,
                addr: str = "127.0.0.1"):
     self.frame = -1
+    self.services = tuple(services)
     self.updated = {s: False for s in services}
     self.rcv_time = {s: 0. for s in services}
     self.rcv_frame = {s: 0 for s in services}
@@ -157,17 +158,22 @@ class SubMaster:
     self.data = {}
     self.valid = {}
     self.logMonoTime = {}
+    self.recv_dts_sum = {s: 0.0 for s in services}
+    self.updated_services = []
 
     self.poller = Poller()
-    self.non_polled_services = [s for s in services if poll is not None and
-                                len(poll) and s not in poll]
+    self.non_polled_services = tuple(s for s in services if poll is not None and
+                                     len(poll) and s not in poll)
+    self.non_polled_service_set = set(self.non_polled_services)
 
     self.ignore_average_freq = [] if ignore_avg_freq is None else ignore_avg_freq
+    self.ignore_average_freq_set = set(self.ignore_average_freq)
     self.ignore_alive = [] if ignore_alive is None else ignore_alive
+    self.ignore_alive_set = set(self.ignore_alive)
 
     for s in services:
       if addr is not None:
-        p = self.poller if s not in self.non_polled_services else None
+        p = self.poller if s not in self.non_polled_service_set else None
         self.sock[s] = sub_sock(s, poller=p, addr=addr, conflate=True)
       self.freq[s] = service_list[s].frequency
 
@@ -179,6 +185,12 @@ class SubMaster:
       self.data[s] = getattr(data, s)
       self.logMonoTime[s] = 0
       self.valid[s] = data.valid
+    self.freq_service_checks = tuple((s, 10. / self.freq[s], 1. / (self.freq[s] * 0.90))
+                                     for s in self.services if self.freq[s] > 1e-5)
+    self.zero_freq_services = tuple(s for s in self.services if self.freq[s] <= 1e-5)
+    self.recv_dts_update_services = {s for s in self.services if self.freq[s] > 1e-5 and
+                                     s not in self.non_polled_service_set and
+                                     s not in self.ignore_average_freq_set}
 
   def __getitem__(self, s: str) -> capnp.lib.capnp._DynamicStructReader:
     return self.data[s]
@@ -195,17 +207,22 @@ class SubMaster:
 
   def update_msgs(self, cur_time: float, msgs: List[capnp.lib.capnp._DynamicStructReader]) -> None:
     self.frame += 1
-    self.updated = dict.fromkeys(self.updated, False)
+    for s in self.updated_services:
+      self.updated[s] = False
+    self.updated_services.clear()
     for msg in msgs:
       if msg is None:
         continue
 
       s = msg.which()
+      if not self.updated[s]:
+        self.updated_services.append(s)
       self.updated[s] = True
 
-      if self.rcv_time[s] > 1e-5 and self.freq[s] > 1e-5 and (s not in self.non_polled_services) \
-        and (s not in self.ignore_average_freq):
-        self.recv_dts[s].append(cur_time - self.rcv_time[s])
+      if self.rcv_time[s] > 1e-5 and s in self.recv_dts_update_services:
+        dt = cur_time - self.rcv_time[s]
+        self.recv_dts_sum[s] += dt - self.recv_dts[s][0]
+        self.recv_dts[s].append(dt)
 
       self.rcv_time[s] = cur_time
       self.rcv_frame[s] = self.frame
@@ -218,42 +235,53 @@ class SubMaster:
         self.alive[s] = True
 
     if not SIMULATION:
-      for s in self.data:
-        # arbitrary small number to avoid float comparison. If freq is 0, we can skip the check
-        if self.freq[s] > 1e-5:
-          # alive if delay is within 10x the expected frequency
-          self.alive[s] = (cur_time - self.rcv_time[s]) < (10. / self.freq[s])
+      for s, alive_timeout, expected_dt in self.freq_service_checks:
+        # alive if delay is within 10x the expected frequency
+        self.alive[s] = (cur_time - self.rcv_time[s]) < alive_timeout
 
-          # alive if average frequency is higher than 90% of expected frequency
-          avg_dt = sum(self.recv_dts[s]) / AVG_FREQ_HISTORY
-          expected_dt = 1 / (self.freq[s] * 0.90)
-          self.freq_ok[s] = (avg_dt < expected_dt)
-          #self.alive[s] = self.alive[s] and (avg_dt < expected_dt)
-        else:
-          self.freq_ok[s] = True
-          self.alive[s] = True
+        # alive if average frequency is higher than 90% of expected frequency
+        avg_dt = self.recv_dts_sum[s] / AVG_FREQ_HISTORY
+        self.freq_ok[s] = (avg_dt < expected_dt)
+        #self.alive[s] = self.alive[s] and (avg_dt < expected_dt)
+      for s in self.zero_freq_services:
+        self.freq_ok[s] = True
+        self.alive[s] = True
 
   def all_alive(self, service_list=None) -> bool:
     if service_list is None:  # check all
-      service_list = self.alive.keys()
-    return all(self.alive[s] for s in service_list if s not in self.ignore_alive)
+      service_list = self.services
+    for s in service_list:
+      if s not in self.ignore_alive_set and not self.alive[s]:
+        return False
+    return True
 
 
   def all_freq_ok(self, service_list=None) -> bool:
     if service_list is None:  # check all
-      service_list = self.alive.keys()
-    return all(self.freq_ok[s] for s in service_list if s not in self.ignore_alive)
+      service_list = self.services
+    for s in service_list:
+      if s not in self.ignore_alive_set and not self.freq_ok[s]:
+        return False
+    return True
 
 
   def all_valid(self, service_list=None) -> bool:
     if service_list is None:  # check all
-      service_list = self.valid.keys()
-    return all(self.valid[s] for s in service_list)
+      service_list = self.services
+    for s in service_list:
+      if not self.valid[s]:
+        return False
+    return True
 
   def all_checks(self, service_list=None) -> bool:
     if service_list is None:  # check all
-      service_list = self.alive.keys()
-    return self.all_alive(service_list=service_list) and self.all_valid(service_list=service_list)
+      service_list = self.services
+    for s in service_list:
+      if s not in self.ignore_alive_set and not self.alive[s]:
+        return False
+      if not self.valid[s]:
+        return False
+    return True
     #return self.all_alive(service_list=service_list) \
     #       and self.all_freq_ok(service_list=service_list) \
     #       and self.all_valid(service_list=service_list)

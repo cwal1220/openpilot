@@ -13,8 +13,8 @@ cdef extern from "selfdrive/boardd/panda.h":
 
 cdef extern void can_list_to_can_capnp_cpp(const vector[can_frame] &can_list, string &out, bool sendCan, bool valid)
 
-def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True):
-  cdef vector[can_frame] can_list
+cdef void fill_can_list(vector[can_frame] &can_list, can_msgs):
+  can_list.clear()
   can_list.reserve(len(can_msgs))
 
   cdef can_frame f
@@ -24,6 +24,28 @@ def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True):
     f.dat = can_msg[2]
     f.src = can_msg[3]
     can_list.push_back(f)
+
+
+cdef class CanBatch:
+  cdef vector[can_frame] frames
+
+
+def can_list_to_can_batch(can_msgs):
+  cdef CanBatch batch = CanBatch()
+  fill_can_list(batch.frames, can_msgs)
+  return batch
+
+
+def can_batch_to_can_capnp(CanBatch batch, msgtype='can', valid=True):
+  cdef string out
+  can_list_to_can_capnp_cpp(batch.frames, out, msgtype == 'sendcan', valid)
+  return out
+
+
+def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True):
+  cdef vector[can_frame] can_list
+  fill_can_list(can_list, can_msgs)
+
   cdef string out
   can_list_to_can_capnp_cpp(can_list, out, msgtype == 'sendcan', valid)
   return out

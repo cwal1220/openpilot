@@ -192,7 +192,7 @@ def radard_thread(sm=None, pm=None, can_sock=None):
   RadarInterface = importlib.import_module(f'selfdrive.car.{CP.carName}.radar_interface').RadarInterface
 
   # *** setup messaging
-  if can_sock is None:
+  if can_sock is None and not CP.radarOffCan:
     can_sock = messaging.sub_sock('can')
   if sm is None:
     sm = messaging.SubMaster(['modelV2', 'carState'], ignore_avg_freq=['modelV2', 'carState'])  # Can't check average frequency, since radar determines timing
@@ -208,7 +208,7 @@ def radard_thread(sm=None, pm=None, can_sock=None):
   enable_lead = CP.openpilotLongitudinalControl or not CP.radarOffCan
 
   while 1:
-    can_strings = messaging.drain_sock_raw(can_sock, wait_for_one=True)
+    can_strings = None if CP.radarOffCan else messaging.drain_sock_raw(can_sock, wait_for_one=True)
     rr = RI.update(can_strings)
 
     if rr is None:

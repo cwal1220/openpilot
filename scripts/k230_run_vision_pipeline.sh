@@ -4,11 +4,82 @@ set -euo pipefail
 ROOT="${K230_OPENPILOT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
 
-DEFAULT_BLOCK="ui,soundd,dmonitoringmodeld,dmonitoringd,sensord"
+export K230_LATERAL_ONLY="${K230_LATERAL_ONLY:-1}"
+DEFAULT_BLOCK="ui,soundd,dmonitoringmodeld,dmonitoringd,sensord,clocksd,logcatd,proclogd"
+if [[ "${K230_LATERAL_ONLY:-0}" == "1" ]]; then
+  DEFAULT_BLOCK="$DEFAULT_BLOCK,radard"
+fi
 export BLOCK="${BLOCK:-$DEFAULT_BLOCK}"
 export PASSIVE="${PASSIVE:-0}"
 export NOSENSOR="${NOSENSOR:-1}"
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
+
+stop_stale_openpilot_processes() {
+  python3 - <<'PY'
+import os
+import signal
+import time
+
+needles = (
+  "k230_replay_can.py",
+  "selfdrive/manager/manager.py",
+  "selfdrive.boardd.pandad",
+  "selfdrive.thermald.thermald",
+  "selfdrive.webui.webuid",
+  "selfdrive.locationd.calibrationd",
+  "selfdrive.locationd.paramsd",
+  "selfdrive.controls.controlsd",
+  "selfdrive.controls.plannerd",
+  "selfdrive.controls.radard",
+  "camerad",
+  "_modeld",
+  "previewd",
+  "locationd",
+)
+
+exclude = set()
+pid = os.getpid()
+while pid > 1:
+  exclude.add(pid)
+  try:
+    with open(f"/proc/{pid}/stat") as f:
+      pid = int(f.read().split()[3])
+  except Exception:
+    break
+
+pids = []
+for name in os.listdir("/proc"):
+  if not name.isdigit():
+    continue
+  pid = int(name)
+  if pid in exclude:
+    continue
+  try:
+    with open(f"/proc/{pid}/comm") as f:
+      comm = f.read().strip()
+    with open(f"/proc/{pid}/cmdline", "rb") as f:
+      cmd = f.read().replace(b"\0", b" ").decode("utf8", "ignore")
+  except Exception:
+    continue
+  text = f"{comm} {cmd}"
+  if any(needle in text for needle in needles):
+    pids.append(pid)
+
+for pid in pids:
+  try:
+    os.kill(pid, signal.SIGTERM)
+  except ProcessLookupError:
+    pass
+
+time.sleep(2)
+
+for pid in pids:
+  try:
+    os.kill(pid, signal.SIGKILL)
+  except ProcessLookupError:
+    pass
+PY
+}
 
 set_openpilot_view() {
   local enabled="$1"
@@ -44,10 +115,12 @@ cleanup() {
     terminate_tree "$manager_pid"
     wait "$manager_pid" 2>/dev/null || true
   fi
+  stop_stale_openpilot_processes || true
 }
 
 trap cleanup INT TERM EXIT
 
+stop_stale_openpilot_processes || true
 set_openpilot_view 0
 "$ROOT/scripts/k230_run_openpilot.sh" ./selfdrive/manager/manager.py &
 manager_pid=$!

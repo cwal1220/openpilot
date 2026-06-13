@@ -36,8 +36,9 @@ int v4l2_drm_setup(struct v4l2_drm_context context[], unsigned num) {
         CKE(ioctl(context[i].video_fd, VIDIOC_QUERYCAP, &capbility), close);
 
         struct v4l2_format format;
+        memset(&format, 0, sizeof(format));
         format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        CKE(ioctl(context[i].video_fd, VIDIOC_G_FMT, &format), close);
+        ioctl(context[i].video_fd, VIDIOC_G_FMT, &format);
         format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         format.fmt.pix.pixelformat = context[i].video_format;
         format.fmt.pix.width = context[i].width;

@@ -3,6 +3,7 @@ import os
 from typing import Optional
 
 TICI = os.path.isfile('/TICI')
+K230 = os.uname().machine == 'riscv64'
 RESERVED_PORT = 8022  # sshd
 STARTING_PORT = 8001
 
@@ -20,6 +21,7 @@ class Service:
     self.decimation = decimation
 
 DCAM_FREQ = 10. if not TICI else 20.
+MODEL_FREQ = 10. if K230 else 20.
 
 services = {
   # service: (should_log, frequency, qlog decimation (optional))
@@ -39,7 +41,7 @@ services = {
   "androidLog": (True, 0.),
   "carState": (True, 100., 10),
   "carControl": (True, 100., 10),
-  "longitudinalPlan": (True, 20., 5),
+  "longitudinalPlan": (True, MODEL_FREQ, 5),
   "procLog": (True, 0.5),
   "gpsLocationExternal": (True, 10., 10),
   "ubloxGnss": (True, 10.),
@@ -48,19 +50,19 @@ services = {
   "ubloxRaw": (True, 20.),
   "liveLocationKalman": (True, 20., 5),
   "liveParameters": (True, 20., 5),
-  "cameraOdometry": (True, 20., 5),
-  "lateralPlan": (True, 20., 5),
+  "cameraOdometry": (True, MODEL_FREQ, 5),
+  "lateralPlan": (True, MODEL_FREQ, 5),
   "thumbnail": (True, 0.2, 1),
   "carEvents": (True, 1., 1),
   "carParams": (True, 0.02, 1),
-  "roadCameraState": (True, 20., 20),
+  "roadCameraState": (True, MODEL_FREQ, 20),
   "driverCameraState": (True, DCAM_FREQ, DCAM_FREQ),
   "driverEncodeIdx": (False, DCAM_FREQ, 1),
   "driverState": (True, DCAM_FREQ, DCAM_FREQ / 2),
   "driverMonitoringState": (True, DCAM_FREQ, DCAM_FREQ / 2),
   "wideRoadEncodeIdx": (False, 20., 1),
   "wideRoadCameraState": (True, 20., 20),
-  "modelV2": (True, 20., 40),
+  "modelV2": (True, MODEL_FREQ, 40),
   "managerState": (True, 2., 1),
   "uploaderState": (True, 0., 1),
   "navInstruction": (True, 0.),

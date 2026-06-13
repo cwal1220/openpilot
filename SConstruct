@@ -231,6 +231,7 @@ if arch == "riscv64":
     "-Wno-error=ignored-attributes",
     "-Wno-error=shadow",
   ]
+  target_ccflags += os.environ.get("OPENPILOT_RISCV_OPT_FLAGS", "").split()
 
 cross_build = arch not in ("Darwin", real_arch)
 default_cc = "riscv64-linux-gnu-gcc" if arch == "riscv64" and cross_build else ("gcc" if arch == "riscv64" else "clang")

@@ -1,6 +1,4 @@
-import copy
 from cereal import car
-import cereal.messaging as messaging
 from common.conversions import Conversions as CV
 from opendbc.can.parser import CANParser
 from opendbc.can.can_define import CANDefine
@@ -16,6 +14,8 @@ FCA_OPT = Params().get_bool('RadarDisable')
 class CarState(CarStateBase):
   def __init__(self, CP):
     super().__init__(CP)
+    params = Params()
+    self.params = params
     can_define = CANDefine(DBC[CP.carFingerprint]["pt"])
 
     if self.CP.carFingerprint in FEATURES["use_cluster_gears"]:
@@ -39,23 +39,16 @@ class CarState(CarStateBase):
     self.prev_cruise_buttons = 0
     self.prev_gap_button = 0
     
-    self.steer_anglecorrection = float(int(Params().get("OpkrSteerAngleCorrection", encoding="utf8")) * 0.1)
-    self.gear_correction = Params().get_bool("JustDoGearD")
-    self.fca11_message = Params().get_bool("FCA11Message")
-    self.rd_conf = Params().get_bool("RadarDisable")
-    self.set_spd_five = Params().get_bool("SetSpeedFive")
+    self.steer_anglecorrection = float(int(params.get("OpkrSteerAngleCorrection", encoding="utf8")) * 0.1)
+    self.gear_correction = params.get_bool("JustDoGearD")
+    self.fca11_message = params.get_bool("FCA11Message")
+    self.rd_conf = params.get_bool("RadarDisable")
+    self.set_spd_five = params.get_bool("SetSpeedFive")
     self.brake_check = False
     self.cancel_check = False
     
     self.cruise_gap = 4
-    self.safety_sign_check = 0
-    self.safety_sign = 0
-    self.safety_dist = 0
-    self.safety_block_sl = 150
-    self.is_highway = False
     self.is_set_speed_in_mph = False
-    self.map_enabled = False
-    self.cs_timer = 0
     self.cruise_active = False
 
     # atom
@@ -72,21 +65,31 @@ class CarState(CarStateBase):
     self.prev_cruise_btn = False
     self.acc_active = False
     self.cruise_set_speed_kph = 0
-    self.cruise_set_mode = int(Params().get("CruiseStatemodeSelInit", encoding="utf8"))
+    self.cruise_set_mode = int(params.get("CruiseStatemodeSelInit", encoding="utf8"))
     self.gasPressed = False
 
-
-    self.sm = messaging.SubMaster(['controlsState'])
+    self.controls_v_cruise = 0
+    self.wheel_speed_factor = CV.KPH_TO_MS * self.CP.wheelSpeedFactor
+    self.is_hybrid = self.CP.carFingerprint in HYBRID_CAR
+    self.is_ev = self.CP.carFingerprint in EV_CAR
+    self.use_cluster_gears = self.CP.carFingerprint in FEATURES["use_cluster_gears"]
+    self.use_tcu_gears = self.CP.carFingerprint in FEATURES["use_tcu_gears"]
+    self.use_elect_gears = self.CP.carFingerprint in FEATURES["use_elect_gears"]
+    self.use_fca = self.CP.carFingerprint in FEATURES["use_fca"]
+    self.send_hda_mfa = self.CP.carFingerprint in FEATURES["send_hda_mfa"]
+    self.has_scc = self.CP.sccBus != -1
+    self.bsm_available = self.CP.bsmAvailable
+    self.openpilot_longitudinal = self.CP.openpilotLongitudinalControl
 
   def set_cruise_speed(self, set_speed):
     self.cruise_set_speed_kph = set_speed
 
   #@staticmethod
-  def cruise_speed_button(self):
-    self.sm.update(0)
+  def cruise_speed_button(self, controls_v_cruise):
     set_speed_kph = self.cruise_set_speed_kph
-    if 1 < round(self.sm['controlsState'].vCruise) < 255:
-      set_speed_kph = round(self.sm['controlsState'].vCruise)
+    controls_v_cruise_rounded = round(controls_v_cruise)
+    if 1 < controls_v_cruise_rounded < 255:
+      set_speed_kph = controls_v_cruise_rounded
 
     if self.cruise_buttons:
       self.cruise_buttons_time += 1
@@ -142,16 +145,6 @@ class CarState(CarStateBase):
 
     return set_speed_kph
 
-  def get_tpms(self, unit, fl, fr, rl, rr):
-    factor = 0.72519 if unit == 1 else 0.1 if unit == 2 else 1 # 0:psi, 1:kpa, 2:bar
-    tpms = car.CarState.TPMS.new_message()
-    tpms.unit = unit
-    tpms.fl = fl * factor
-    tpms.fr = fr * factor
-    tpms.rl = rl * factor
-    tpms.rr = rr * factor
-    return tpms
-
   def update(self, cp, cp2, cp_cam):
     cp_mdps = cp2 if self.CP.mdpsBus == 1 else cp
     cp_sas = cp2 if self.CP.sasBus else cp
@@ -164,81 +157,108 @@ class CarState(CarStateBase):
 
     ret = car.CarState.new_message()
 
-    ret.doorOpen = any([cp.vl["CGW1"]["CF_Gway_DrvDrSw"], cp.vl["CGW1"]["CF_Gway_AstDrSw"],
-                        cp.vl["CGW2"]["CF_Gway_RLDrSw"], cp.vl["CGW2"]["CF_Gway_RRDrSw"]])
+    cp_vl = cp.vl
+    cp_mdps_vl = cp_mdps.vl
+    cp_sas_vl = cp_sas.vl
+    cp_scc_vl = cp_scc.vl
+    cp_cam_vl = cp_cam.vl
+    cp_fca_vl = cp_fca.vl
 
-    ret.seatbeltUnlatched = cp.vl["CGW1"]["CF_Gway_DrvSeatBeltSw"] == 0
+    cgw1 = cp_vl["CGW1"]
+    cgw2 = cp_vl["CGW2"]
+    clu11 = cp_vl["CLU11"]
+    esp12 = cp_vl["ESP12"]
+    tcs13 = cp_vl["TCS13"]
+    tcs15 = cp_vl["TCS15"]
+    whl_spd11 = cp_vl["WHL_SPD11"]
+    lvr12 = cp_vl["LVR12"]
+    tpms11 = cp_vl["TPMS11"]
+    mdps12 = cp_mdps_vl["MDPS12"]
+    sas11 = cp_sas_vl["SAS11"]
+    scc11 = cp_scc_vl["SCC11"]
+    scc12 = cp_scc_vl["SCC12"]
+    lkas11 = cp_cam_vl["LKAS11"]
+    cruise_state = ret.cruiseState
 
-    ret.wheelSpeeds = self.get_wheel_speeds(
-      cp.vl["WHL_SPD11"]["WHL_SPD_FL"],
-      cp.vl["WHL_SPD11"]["WHL_SPD_FR"],
-      cp.vl["WHL_SPD11"]["WHL_SPD_RL"],
-      cp.vl["WHL_SPD11"]["WHL_SPD_RR"],
-    )
-    ret.vEgoRaw = (ret.wheelSpeeds.fl + ret.wheelSpeeds.fr + ret.wheelSpeeds.rl + ret.wheelSpeeds.rr) / 4.
-    ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
-    ret.vEgoOP = ret.vEgo
+    ret.doorOpen = bool(cgw1["CF_Gway_DrvDrSw"] or cgw1["CF_Gway_AstDrSw"] or
+                        cgw2["CF_Gway_RLDrSw"] or cgw2["CF_Gway_RRDrSw"])
 
-    ret.vEgo = cp.vl["CLU11"]["CF_Clu_Vanz"] * CV.MPH_TO_MS if bool(cp.vl["CLU11"]["CF_Clu_SPEED_UNIT"]) else cp.vl["CLU11"]["CF_Clu_Vanz"] * CV.KPH_TO_MS
+    ret.seatbeltUnlatched = cgw1["CF_Gway_DrvSeatBeltSw"] == 0
+
+    wheel_speed_factor = self.wheel_speed_factor
+    wheel_speed_fl = whl_spd11["WHL_SPD_FL"] * wheel_speed_factor
+    wheel_speed_fr = whl_spd11["WHL_SPD_FR"] * wheel_speed_factor
+    wheel_speed_rl = whl_spd11["WHL_SPD_RL"] * wheel_speed_factor
+    wheel_speed_rr = whl_spd11["WHL_SPD_RR"] * wheel_speed_factor
+    ret.wheelSpeeds.fl = wheel_speed_fl
+    ret.wheelSpeeds.fr = wheel_speed_fr
+    ret.wheelSpeeds.rl = wheel_speed_rl
+    ret.wheelSpeeds.rr = wheel_speed_rr
+    v_ego_raw = (wheel_speed_fl + wheel_speed_fr + wheel_speed_rl + wheel_speed_rr) / 4.
+    ret.vEgoRaw = v_ego_raw
+    v_ego_op, ret.aEgo = self.update_speed_kf(v_ego_raw)
+    ret.vEgoOP = v_ego_op
+
+    ret.vEgo = clu11["CF_Clu_Vanz"] * CV.MPH_TO_MS if bool(clu11["CF_Clu_SPEED_UNIT"]) else clu11["CF_Clu_Vanz"] * CV.KPH_TO_MS
 
     ret.standstill = ret.vEgoRaw < 0.1
     ret.standStill = self.CP.standStill
 
-    ret.steeringAngleDeg = cp_sas.vl["SAS11"]["SAS_Angle"] - self.steer_anglecorrection
-    ret.steeringRateDeg = cp_sas.vl["SAS11"]["SAS_Speed"]
-    ret.yawRate = cp.vl["ESP12"]["YAW_RATE"]
+    ret.steeringAngleDeg = sas11["SAS_Angle"] - self.steer_anglecorrection
+    ret.steeringRateDeg = sas11["SAS_Speed"]
+    ret.yawRate = esp12["YAW_RATE"]
     ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(
-      50, cp.vl["CGW1"]["CF_Gway_TurnSigLh"], cp.vl["CGW1"]["CF_Gway_TurnSigRh"])
-    ret.steeringTorque = cp_mdps.vl["MDPS12"]["CR_Mdps_StrColTq"]
-    ret.steeringTorqueEps = cp_mdps.vl["MDPS12"]["CR_Mdps_OutTq"]
+      50, cgw1["CF_Gway_TurnSigLh"], cgw1["CF_Gway_TurnSigRh"])
+    ret.steeringTorque = mdps12["CR_Mdps_StrColTq"]
+    ret.steeringTorqueEps = mdps12["CR_Mdps_OutTq"]
     ret.steeringPressed = abs(ret.steeringTorque) > STEER_THRESHOLD
 
-    self.mdps_error_cnt += 1 if cp_mdps.vl["MDPS12"]["CF_Mdps_ToiUnavail"] != 0 else -self.mdps_error_cnt
+    self.mdps_error_cnt += 1 if mdps12["CF_Mdps_ToiUnavail"] != 0 else -self.mdps_error_cnt
     ret.steerFaultTemporary = self.mdps_error_cnt > 100 #cp_mdps.vl["MDPS12"]["CF_Mdps_ToiUnavail"] != 0
 
-    self.VSetDis = cp_scc.vl["SCC11"]["VSetDis"]
+    self.VSetDis = scc11["VSetDis"]
     ret.vSetDis = self.VSetDis
-    self.clu_Vanz = cp.vl["CLU11"]["CF_Clu_Vanz"]
-    lead_objspd = cp_scc.vl["SCC11"]["ACC_ObjRelSpd"]
+    self.clu_Vanz = clu11["CF_Clu_Vanz"]
+    lead_objspd = scc11["ACC_ObjRelSpd"]
     self.lead_objspd = lead_objspd * CV.MS_TO_KPH
-    self.Mdps_ToiUnavail = cp_mdps.vl["MDPS12"]["CF_Mdps_ToiUnavail"]
-    self.driverOverride = cp.vl["TCS13"]["DriverOverride"]
+    self.Mdps_ToiUnavail = mdps12["CF_Mdps_ToiUnavail"]
+    self.driverOverride = tcs13["DriverOverride"]
     if self.driverOverride == 1:
       self.driverAcc_time = 100
     elif self.driverAcc_time:
       self.driverAcc_time -= 1
 
     # cruise state, 크루즈 여부와 관련 없이 무조건 활성화
-    ret.cruiseState.enabled = True
-    ret.cruiseState.available = True
+    cruise_state.enabled = True
+    cruise_state.available = True
 
-    ret.cruiseState.standstill = cp_scc.vl["SCC11"]["SCCInfoDisplay"] == 4. if not self.no_radar else False
-    self.cruiseState_standstill = ret.cruiseState.standstill
-    self.is_set_speed_in_mph = bool(cp.vl["CLU11"]["CF_Clu_SPEED_UNIT"])
+    cruise_state.standstill = scc11["SCCInfoDisplay"] == 4. if not self.no_radar else False
+    self.cruiseState_standstill = cruise_state.standstill
+    self.is_set_speed_in_mph = bool(clu11["CF_Clu_SPEED_UNIT"])
     ret.isMph = self.is_set_speed_in_mph
     
-    self.acc_active = (cp_scc.vl["SCC12"]['ACCMode'] != 0)
+    self.acc_active = (scc12['ACCMode'] != 0)
     self.cruise_active = self.acc_active
     if self.cruise_active:
       self.brake_check = False
       self.cancel_check = False
 
-    ret.cruiseState.accActive = self.acc_active
-    ret.cruiseState.gapSet = cp.vl["SCC11"]['TauGapSet']
-    ret.cruiseState.cruiseSwState = self.cruise_buttons
-    ret.cruiseState.modeSel = self.cruise_set_mode
+    cruise_state.accActive = self.acc_active
+    cruise_state.gapSet = scc11['TauGapSet']
+    cruise_state.cruiseSwState = self.cruise_buttons
+    cruise_state.modeSel = self.cruise_set_mode
 
-    set_speed = self.cruise_speed_button()
-    if ret.cruiseState.enabled and (self.brake_check == False or self.cancel_check == False):
+    set_speed = self.cruise_speed_button(self.controls_v_cruise)
+    if cruise_state.enabled and (self.brake_check == False or self.cancel_check == False):
       speed_conv = CV.MPH_TO_MS if self.is_set_speed_in_mph else CV.KPH_TO_MS
-      ret.cruiseState.speed = set_speed * speed_conv if not self.no_radar else \
-                                         cp.vl["LVR12"]["CF_Lvr_CruiseSet"] * speed_conv
+      cruise_state.speed = set_speed * speed_conv if not self.no_radar else \
+                           lvr12["CF_Lvr_CruiseSet"] * speed_conv
     else:
-      ret.cruiseState.speed = 0
+      cruise_state.speed = 0
 
-    self.cruise_main_button = cp.vl["CLU11"]["CF_Clu_CruiseSwMain"]
+    self.cruise_main_button = clu11["CF_Clu_CruiseSwMain"]
     self.prev_cruise_buttons = self.cruise_buttons
-    self.cruise_buttons = cp.vl["CLU11"]["CF_Clu_CruiseSwState"]
+    self.cruise_buttons = clu11["CF_Clu_CruiseSwState"]
     ret.cruiseButtons = self.cruise_buttons
 
     if self.prev_gap_button != self.cruise_buttons:
@@ -250,159 +270,129 @@ class CarState(CarStateBase):
 
     # TODO: Find brake pressure
     ret.brake = 0
-    ret.brakePressed = cp.vl["TCS13"]["DriverBraking"] != 0
+    brake_pressed = tcs13["DriverBraking"] != 0
+    ret.brakePressed = brake_pressed
 
-    if ret.brakePressed:
+    if brake_pressed:
       self.brake_check = True
     if self.cruise_buttons == 4:
       self.cancel_check = True
 
     # TODO: Check this
-    ret.brakeLights = bool(cp.vl["TCS13"]["BrakeLight"] or ret.brakePressed)
+    ret.brakeLights = bool(tcs13["BrakeLight"] or brake_pressed)
 
-    if self.CP.carFingerprint in (HYBRID_CAR | EV_CAR):
-      if self.CP.carFingerprint in HYBRID_CAR:
-        ret.gas = cp.vl["E_EMS11"]["CR_Vcu_AccPedDep_Pos"] / 254.
-        ret.engineRpm = cp.vl["E_EMS11"]["N"] # opkr
+    if self.is_hybrid or self.is_ev:
+      if self.is_hybrid:
+        e_ems11 = cp_vl["E_EMS11"]
+        ret.gas = e_ems11["CR_Vcu_AccPedDep_Pos"] / 254.
+        ret.engineRpm = e_ems11["N"] # opkr
         ret.chargeMeter = 0
       else:
-        ret.gas = cp.vl["E_EMS11"]["Accel_Pedal_Pos"] / 254.
-        ret.engineRpm = cp.vl["ELECT_GEAR"]["Elect_Motor_Speed"] * 30 # opkr, may multiply deceleration ratio in line with engine rpm
-        ret.chargeMeter = cp.vl["EV_Info"]["OPKR_EV_Charge_Level"] # opkr
+        e_ems11 = cp_vl["E_EMS11"]
+        elect_gear = cp_vl["ELECT_GEAR"]
+        ret.gas = e_ems11["Accel_Pedal_Pos"] / 254.
+        ret.engineRpm = elect_gear["Elect_Motor_Speed"] * 30 # opkr, may multiply deceleration ratio in line with engine rpm
+        ret.chargeMeter = cp_vl["EV_Info"]["OPKR_EV_Charge_Level"] # opkr
       ret.gasPressed = ret.gas > 0
     else:
-      ret.gas = cp.vl["EMS12"]["PV_AV_CAN"] / 100.
-      ret.gasPressed = bool(cp.vl["EMS16"]["CF_Ems_AclAct"])
-      ret.engineRpm = cp.vl["EMS_366"]["N"]
+      ret.gas = cp_vl["EMS12"]["PV_AV_CAN"] / 100.
+      ret.gasPressed = bool(cp_vl["EMS16"]["CF_Ems_AclAct"])
+      ret.engineRpm = cp_vl["EMS_366"]["N"]
       ret.chargeMeter = 0
 
-    ret.espDisabled = (cp.vl["TCS15"]["ESC_Off_Step"] != 0)
+    ret.espDisabled = (tcs15["ESC_Off_Step"] != 0)
 
-    self.parkBrake = cp.vl["TCS13"]["PBRAKE_ACT"] == 1
-    self.gasPressed = ret.gasPressed
+    self.parkBrake = tcs13["PBRAKE_ACT"] == 1
+    gas_pressed = ret.gasPressed
+    self.gasPressed = gas_pressed
 
     # opkr
-    ret.tpms = self.get_tpms(
-      cp.vl["TPMS11"]["UNIT"],
-      cp.vl["TPMS11"]["PRESSURE_FL"],
-      cp.vl["TPMS11"]["PRESSURE_FR"],
-      cp.vl["TPMS11"]["PRESSURE_RL"],
-      cp.vl["TPMS11"]["PRESSURE_RR"],
-    )
+    tpms_unit = tpms11["UNIT"]
+    tpms_factor = 0.72519 if tpms_unit == 1 else 0.1 if tpms_unit == 2 else 1 # 0:psi, 1:kpa, 2:bar
+    tpms = ret.tpms
+    tpms.unit = tpms_unit
+    tpms.fl = tpms11["PRESSURE_FL"] * tpms_factor
+    tpms.fr = tpms11["PRESSURE_FR"] * tpms_factor
+    tpms.rl = tpms11["PRESSURE_RL"] * tpms_factor
+    tpms.rr = tpms11["PRESSURE_RR"] * tpms_factor
 
-    # OPKR
-    self.cs_timer += 1
-    if self.cs_timer > 100:
-      self.cs_timer = 0
-      self.map_enabled = Params().get_bool("OpkrMapEnable")
-    self.sm.update(0)
-    vCruiseMax = self.sm['controlsState'].vCruise
-    self.safety_sign_check = cp.vl["NAVI"]["OPKR_S_Sign"]
-    self.safety_block_sl = cp.vl["NAVI"]["OPKR_SBR_LSpd"]
-    if cp.vl["NAVI"]["OPKR_S_Dist"] < 1023:
-      self.safety_dist = cp.vl["NAVI"]["OPKR_S_Dist"]
-    elif cp.vl["NAVI"]["OPKR_SBR_Dist"] < 65535:
-      self.safety_dist = cp.vl["NAVI"]["OPKR_SBR_Dist"]
-    else:
-      self.safety_dist = 0
-    self.is_highway = cp_scc.vl["SCC11"]["Navi_SCC_Camera_Act"] != 0.
-    if self.safety_sign_check in (24., 25., 26.) and 21 < round(vCruiseMax) <= (69 if not self.is_set_speed_in_mph else 59):
-      self.safety_sign = 30. if not self.is_set_speed_in_mph else 40.
-    elif self.safety_sign_check in (0., 1., 2.) and 21 < round(vCruiseMax) <= (79 if not self.is_set_speed_in_mph else 64):
-      self.safety_sign = 40. if not self.is_set_speed_in_mph else 45.
-    elif self.safety_sign_check in (8., 9., 10.) and 21 < round(vCruiseMax) <= (89 if not self.is_set_speed_in_mph else 69):
-      self.safety_sign = 50. if not self.is_set_speed_in_mph else 50.
-    elif self.safety_sign_check in (16., 17., 18.) and 21 < round(vCruiseMax) <= (99 if not self.is_set_speed_in_mph else 74):
-      self.safety_sign = 60. if not self.is_set_speed_in_mph else 55.
-    elif self.safety_sign_check in (24., 25., 26.) and 21 < round(vCruiseMax) <= (109 if not self.is_set_speed_in_mph else 79):
-      self.safety_sign = 70. if not self.is_set_speed_in_mph else 60.
-    elif self.safety_sign_check in (0., 1., 2.) and 21 < round(vCruiseMax):
-      self.safety_sign = 80. if not self.is_set_speed_in_mph else 65.
-    elif self.safety_sign_check in (8., 9., 10.) and 21 < round(vCruiseMax):
-      self.safety_sign = 90. if not self.is_set_speed_in_mph else 70.
-    elif self.safety_sign_check in (16., 17., 18.) and 21 < round(vCruiseMax):
-      self.safety_sign = 100. if not self.is_set_speed_in_mph else 75.
-    elif self.safety_sign_check in (24., 25., 26.) and 21 < round(vCruiseMax):
-      self.safety_sign = 110. if not self.is_set_speed_in_mph else 80.
-    elif self.safety_block_sl < 150:
-      self.safety_sign = self.safety_block_sl
-    else:
-      self.safety_sign = 0.
-
-    ret.safetySign = self.safety_sign
-    ret.safetyDist = self.safety_dist
-    self.cruiseGapSet = cp_scc.vl["SCC11"]["TauGapSet"]
+    ret.safetySign = 0.
+    ret.safetyDist = 0.
+    self.cruiseGapSet = scc11["TauGapSet"]
     ret.cruiseGapSet = self.cruiseGapSet
 
     # Gear Selection via Cluster - For those Kia/Hyundai which are not fully discovered, we can use the Cluster Indicator for Gear Selection,
     # as this seems to be standard over all cars, but is not the preferred method.
-    if self.CP.carFingerprint in FEATURES["use_cluster_gears"]:
-      gear = cp.vl["CLU15"]["CF_Clu_Gear"]
+    if self.use_cluster_gears:
+      gear = cp_vl["CLU15"]["CF_Clu_Gear"]
       ret.gearStep = 0
-    elif self.CP.carFingerprint in FEATURES["use_tcu_gears"]:
-      gear = cp.vl["TCU12"]["CUR_GR"]
+    elif self.use_tcu_gears:
+      gear = cp_vl["TCU12"]["CUR_GR"]
       ret.gearStep = 0
-    elif self.CP.carFingerprint in FEATURES["use_elect_gears"]:
+    elif self.use_elect_gears:
       if self.CP.carFingerprint == CAR.NEXO_FE:
-        gear = cp.vl["EMS20"]["Elect_Gear_Shifter_NEXO"] # NEXO gear by multikyd
+        gear = cp_vl["EMS20"]["Elect_Gear_Shifter_NEXO"] # NEXO gear by multikyd
       else:
-        gear = cp.vl["ELECT_GEAR"]["Elect_Gear_Shifter"]
-      ret.gearStep = cp.vl["ELECT_GEAR"]["Elect_Gear_Step"] # opkr
+        gear = cp_vl["ELECT_GEAR"]["Elect_Gear_Shifter"]
+      ret.gearStep = cp_vl["ELECT_GEAR"]["Elect_Gear_Step"] # opkr
     else:
-      gear = cp.vl["LVR12"]["CF_Lvr_Gear"]
-      ret.gearStep = cp.vl["LVR11"]["CF_Lvr_GearInf"] # opkr
+      gear = lvr12["CF_Lvr_Gear"]
+      ret.gearStep = cp_vl["LVR11"]["CF_Lvr_GearInf"] # opkr
 
     if self.gear_correction:
       ret.gearShifter = GearShifter.drive
     else:
       ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
 
-    if self.CP.sccBus != -1:
-      if self.CP.carFingerprint in FEATURES["use_fca"] or self.fca11_message:
-        ret.stockAeb = cp_fca.vl["FCA11"]["FCA_CmdAct"] != 0
-        ret.stockFcw = cp_fca.vl["FCA11"]["CF_VSM_Warn"] == 2
+    if self.has_scc:
+      if self.use_fca or self.fca11_message:
+        fca11 = cp_fca_vl["FCA11"]
+        ret.stockAeb = fca11["FCA_CmdAct"] != 0
+        ret.stockFcw = fca11["CF_VSM_Warn"] == 2
       else:
-        ret.stockAeb = cp_scc.vl["SCC12"]["AEB_CmdAct"] != 0
-        ret.stockFcw = cp_scc.vl["SCC12"]["CF_VSM_Warn"] == 2
+        ret.stockAeb = scc12["AEB_CmdAct"] != 0
+        ret.stockFcw = scc12["CF_VSM_Warn"] == 2
 
     # Blind Spot Detection and Lane Change Assist signals
-    if self.CP.bsmAvailable:
-      ret.leftBlindspot = cp.vl["LCA11"]["CF_Lca_IndLeft"] != 0
-      ret.rightBlindspot = cp.vl["LCA11"]["CF_Lca_IndRight"] != 0
+    if self.bsm_available:
+      lca11 = cp_vl["LCA11"]
+      ret.leftBlindspot = lca11["CF_Lca_IndLeft"] != 0
+      ret.rightBlindspot = lca11["CF_Lca_IndRight"] != 0
 
-    # save the entire LKAS11, CLU11, SCC12 and MDPS12
-    self.lkas11 = copy.copy(cp_cam.vl["LKAS11"])
-    self.clu11 = copy.copy(cp.vl["CLU11"])
-    self.scc11 = copy.copy(cp_scc.vl["SCC11"])
-    self.scc12 = copy.copy(cp_scc.vl["SCC12"])
-    self.scc13 = copy.copy(cp_scc.vl["SCC13"])
-    self.scc14 = copy.copy(cp_scc.vl["SCC14"])
-    if self.rd_conf:
-      self.fca11 = copy.copy(cp_fca.vl["FCA11"])
-    self.mdps12 = copy.copy(cp_mdps.vl["MDPS12"])
+    # save the entire LKAS11, CLU11, SCC12 and MDPS12 for CarController
+    self.lkas11 = lkas11.copy()
+    self.clu11 = clu11.copy()
+    self.scc11 = scc11.copy()
+    self.scc12 = scc12.copy()
+    self.mdps12 = mdps12.copy()
 
-    self.scc11init = copy.copy(cp.vl["SCC11"])
-    self.scc12init = copy.copy(cp.vl["SCC12"])
-    if self.rd_conf:
-      self.fca11init = copy.copy(cp.vl["FCA11"])
+    if self.openpilot_longitudinal:
+      self.scc13 = cp_scc_vl["SCC13"].copy()
+      self.scc14 = cp_scc_vl["SCC14"].copy()
+      self.scc11init = cp_vl["SCC11"].copy()
+      self.scc12init = cp_vl["SCC12"].copy()
+      if self.rd_conf:
+        self.fca11 = cp_fca_vl["FCA11"].copy()
+        self.fca11init = cp_vl["FCA11"].copy()
 
-    if self.CP.carFingerprint in FEATURES["send_hda_mfa"]:
-      self.lfahda = copy.copy(cp_cam.vl["LFAHDA_MFC"])
+    if self.send_hda_mfa:
+      self.lfahda = cp_cam_vl["LFAHDA_MFC"].copy()
 
-    ret.brakeHold = cp.vl["TCS15"]["AVH_LAMP"] == 2 # 0 OFF, 1 ERROR, 2 ACTIVE, 3 READY
-    self.brakeHold = ret.brakeHold
-    self.brake_error = cp.vl["TCS13"]["ACCEnable"] == 3 # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
-    self.steer_state = cp_mdps.vl["MDPS12"]["CF_Mdps_ToiActive"] #0 NOT ACTIVE, 1 ACTIVE
-    self.lead_distance = cp_scc.vl["SCC11"]["ACC_ObjDist"] if not self.no_radar else 0
+    brake_hold = tcs15["AVH_LAMP"] == 2 # 0 OFF, 1 ERROR, 2 ACTIVE, 3 READY
+    ret.brakeHold = brake_hold
+    self.brakeHold = brake_hold
+    self.brake_error = tcs13["ACCEnable"] == 3 # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
+    self.steer_state = mdps12["CF_Mdps_ToiActive"] #0 NOT ACTIVE, 1 ACTIVE
+    self.lead_distance = scc11["ACC_ObjDist"] if not self.no_radar else 0
 
-    ret.radarDistance = cp_scc.vl["SCC11"]["ACC_ObjDist"] if not self.no_radar else 0
-    self.lkas_error = cp_cam.vl["LKAS11"]["CF_Lkas_LdwsSysState"] == 7
+    ret.radarDistance = scc11["ACC_ObjDist"] if not self.no_radar else 0
+    self.lkas_error = lkas11["CF_Lkas_LdwsSysState"] == 7
     if not self.lkas_error:
-      self.lkas_button_on = cp_cam.vl["LKAS11"]["CF_Lkas_LdwsSysState"]
+      self.lkas_button_on = lkas11["CF_Lkas_LdwsSysState"]
     
-    ret.cruiseAccStatus = cp_scc.vl["SCC12"]["ACCMode"] == 1
+    ret.cruiseAccStatus = scc12["ACCMode"] == 1
     ret.driverAcc = self.driverOverride == 1
-    ret.aReqValue = cp_scc.vl["SCC12"]["aReqValue"]
+    ret.aReqValue = scc12["aReqValue"]
 
     return ret
 
@@ -469,11 +459,6 @@ class CarState(CarStateBase):
       ("ACC_ObjLatPos", "SCC11"),
       ("ACC_ObjDist", "SCC11"), #TK211X value is 204.6
       ("ACC_ObjRelSpd", "SCC11"),
-      ("Navi_SCC_Curve_Status", "SCC11"),
-      ("Navi_SCC_Curve_Act", "SCC11"),
-      ("Navi_SCC_Camera_Act", "SCC11"),
-      ("Navi_SCC_Camera_Status", "SCC11"),
-
       ("ACCMode", "SCC12"),
       ("CF_VSM_Prefill", "SCC12"),
       ("CF_VSM_DecCmdAct", "SCC12"),
@@ -514,11 +499,6 @@ class CarState(CarStateBase):
       ("PRESSURE_FR", "TPMS11"),
       ("PRESSURE_RL", "TPMS11"),
       ("PRESSURE_RR", "TPMS11"),
-
-      ("OPKR_S_Dist", "NAVI"),
-      ("OPKR_S_Sign", "NAVI"),
-      ("OPKR_SBR_Dist", "NAVI"),
-      ("OPKR_SBR_LSpd", "NAVI"),
 
       ("N", "EMS_366"),
 
@@ -627,7 +607,7 @@ class CarState(CarStateBase):
     if CP.carFingerprint == CAR.SANTAFE_TM:
       checks.remove(("TCS13", 50))
 
-    return CANParser(DBC[CP.carFingerprint]["pt"], signals, checks, 0, enforce_checks=False)
+    return CANParser(DBC[CP.carFingerprint]["pt"], signals, checks, 0, enforce_checks=False, track_all=False)
 
   @staticmethod
   def get_can2_parser(CP):
@@ -667,11 +647,6 @@ class CarState(CarStateBase):
         ("ACC_ObjLatPos", "SCC11"),
         ("ACC_ObjDist", "SCC11"),
         ("ACC_ObjRelSpd", "SCC11"),
-        ("Navi_SCC_Curve_Status", "SCC11"),
-        ("Navi_SCC_Curve_Act", "SCC11"),
-        ("Navi_SCC_Camera_Act", "SCC11"),
-        ("Navi_SCC_Camera_Status", "SCC11"),
-
         ("ACCMode", "SCC12"),
         ("CF_VSM_Prefill", "SCC12"),
         ("CF_VSM_DecCmdAct", "SCC12"),
@@ -708,7 +683,7 @@ class CarState(CarStateBase):
         ("SCC11", 50),
         ("SCC12", 50)
       ]
-    return CANParser(DBC[CP.carFingerprint]["pt"], signals, checks, 1, enforce_checks=False)
+    return CANParser(DBC[CP.carFingerprint]["pt"], signals, checks, 1, enforce_checks=False, track_all=False)
 
   @staticmethod
   def get_cam_can_parser(CP):
@@ -746,11 +721,6 @@ class CarState(CarStateBase):
         ("ACC_ObjLatPos", "SCC11"),
         ("ACC_ObjDist", "SCC11"),
         ("ACC_ObjRelSpd", "SCC11"),
-        ("Navi_SCC_Curve_Status", "SCC11"),
-        ("Navi_SCC_Curve_Act", "SCC11"),
-        ("Navi_SCC_Camera_Act", "SCC11"),
-        ("Navi_SCC_Camera_Status", "SCC11"),
-
         ("ACCMode", "SCC12"),
         ("CF_VSM_Prefill", "SCC12"),
         ("CF_VSM_DecCmdAct", "SCC12"),
@@ -821,4 +791,4 @@ class CarState(CarStateBase):
         ]
         checks += [("LFAHDA_MFC", 20)]
 
-    return CANParser(DBC[CP.carFingerprint]["pt"], signals, checks, 2, enforce_checks=False)
+    return CANParser(DBC[CP.carFingerprint]["pt"], signals, checks, 2, enforce_checks=False, track_all=False)

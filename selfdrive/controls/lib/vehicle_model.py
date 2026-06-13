@@ -45,6 +45,8 @@ class VehicleModel:
     self.cF: float = stiffness_factor * self.cF_orig
     self.cR: float = stiffness_factor * self.cR_orig
     self.sR: float = steer_ratio
+    self.sf: float = calc_slip_factor(self)
+    self.inv_sf: float = 0.0 if abs(self.sf) < 1e-6 else 1. / self.sf
 
   def steady_state_sol(self, sa: float, u: float, roll: float) -> np.ndarray:
     """Returns the steady state solution.
@@ -88,8 +90,7 @@ class VehicleModel:
     Returns:
       Curvature factor [1/m]
     """
-    sf = calc_slip_factor(self)
-    return (1. - self.chi) / (1. - sf * u**2) / self.l
+    return (1. - self.chi) / (1. - self.sf * u**2) / self.l
 
   def get_steer_from_curvature(self, curv: float, u: float, roll: float) -> float:
     """Calculates the required steering wheel angle for a given curvature
@@ -115,12 +116,10 @@ class VehicleModel:
     Returns:
       Roll compensation curvature [rad]
     """
-    sf = calc_slip_factor(self)
-
-    if abs(sf) < 1e-6:
+    if self.inv_sf == 0.0:
       return 0
     else:
-      return (ACCELERATION_DUE_TO_GRAVITY * roll) / ((1 / sf) - u**2)
+      return (ACCELERATION_DUE_TO_GRAVITY * roll) / (self.inv_sf - u**2)
 
   def get_steer_from_yaw_rate(self, yaw_rate: float, u: float, roll: float) -> float:
     """Calculates the required steering wheel angle for a given yaw_rate

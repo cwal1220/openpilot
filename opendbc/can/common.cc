@@ -1,12 +1,12 @@
 #include "common.h"
 
-unsigned int honda_checksum(uint32_t address, const std::vector<uint8_t> &d) {
+unsigned int honda_checksum(uint32_t address, const uint8_t *d, size_t d_size) {
   int s = 0;
   bool extended = address > 0x7FF;
   while (address) { s += (address & 0xF); address >>= 4; }
-  for (int i = 0; i < d.size(); i++) {
+  for (size_t i = 0; i < d_size; i++) {
     uint8_t x = d[i];
-    if (i == d.size()-1) x >>= 4; // remove checksum
+    if (i == d_size - 1) x >>= 4; // remove checksum
     s += (x & 0xF) + (x >> 4);
   }
   s = 8-s;
@@ -15,28 +15,40 @@ unsigned int honda_checksum(uint32_t address, const std::vector<uint8_t> &d) {
   return s & 0xF;
 }
 
-unsigned int toyota_checksum(uint32_t address, const std::vector<uint8_t> &d) {
-  unsigned int s = d.size();
+unsigned int honda_checksum(uint32_t address, const std::vector<uint8_t> &d) {
+  return honda_checksum(address, d.data(), d.size());
+}
+
+unsigned int toyota_checksum(uint32_t address, const uint8_t *d, size_t d_size) {
+  unsigned int s = d_size;
   while (address) { s += address & 0xFF; address >>= 8; }
-  for (int i = 0; i < d.size() - 1; i++) { s += d[i]; }
+  for (size_t i = 0; i + 1 < d_size; i++) { s += d[i]; }
+
+  return s & 0xFF;
+}
+
+unsigned int toyota_checksum(uint32_t address, const std::vector<uint8_t> &d) {
+  return toyota_checksum(address, d.data(), d.size());
+}
+
+unsigned int subaru_checksum(uint32_t address, const uint8_t *d, size_t d_size) {
+  unsigned int s = 0;
+  while (address) { s += address & 0xFF; address >>= 8; }
+
+  // skip checksum in first byte
+  for (size_t i = 1; i < d_size; i++) { s += d[i]; };
 
   return s & 0xFF;
 }
 
 unsigned int subaru_checksum(uint32_t address, const std::vector<uint8_t> &d) {
-  unsigned int s = 0;
-  while (address) { s += address & 0xFF; address >>= 8; }
-
-  // skip checksum in first byte
-  for (int i = 1; i < d.size(); i++) { s += d[i]; };
-
-  return s & 0xFF;
+  return subaru_checksum(address, d.data(), d.size());
 }
 
-unsigned int chrysler_checksum(uint32_t address, const std::vector<uint8_t> &d) {
+unsigned int chrysler_checksum(uint32_t address, const uint8_t *d, size_t d_size) {
   /* jeep chrysler canbus checksum from http://illmatics.com/Remote%20Car%20Hacking.pdf */
   uint8_t checksum = 0xFF;
-  for (int j = 0; j < (d.size() - 1); j++) {
+  for (size_t j = 0; j + 1 < d_size; j++) {
     uint8_t shift = 0x80;
     uint8_t curr = d[j];
     for (int i = 0; i < 8; i++) {
@@ -64,6 +76,10 @@ unsigned int chrysler_checksum(uint32_t address, const std::vector<uint8_t> &d) 
   return ~checksum & 0xFF;
 }
 
+unsigned int chrysler_checksum(uint32_t address, const std::vector<uint8_t> &d) {
+  return chrysler_checksum(address, d.data(), d.size());
+}
+
 // Static lookup table for fast computation of CRC8 poly 0x2F, aka 8H2F/AUTOSAR
 uint8_t crc8_lut_8h2f[256];
 
@@ -89,7 +105,7 @@ void init_crc_lookup_tables() {
   gen_crc_lookup_table(0x2F, crc8_lut_8h2f);    // CRC-8 8H2F/AUTOSAR for Volkswagen
 }
 
-unsigned int volkswagen_crc(uint32_t address, const std::vector<uint8_t> &d) {
+unsigned int volkswagen_crc(uint32_t address, const uint8_t *d, size_t d_size) {
   // Volkswagen uses standard CRC8 8H2F/AUTOSAR, but they compute it with
   // a magic variable padding byte tacked onto the end of the payload.
   // https://www.autosar.org/fileadmin/user_upload/standards/classic/4-3/AUTOSAR_SWS_CRCLibrary.pdf
@@ -97,7 +113,7 @@ unsigned int volkswagen_crc(uint32_t address, const std::vector<uint8_t> &d) {
   uint8_t crc = 0xFF; // Standard init value for CRC8 8H2F/AUTOSAR
 
   // CRC the payload first, skipping over the first byte where the CRC lives.
-  for (int i = 1; i < d.size(); i++) {
+  for (size_t i = 1; i < d_size; i++) {
     crc ^= d[i];
     crc = crc8_lut_8h2f[crc];
   }
@@ -170,12 +186,16 @@ unsigned int volkswagen_crc(uint32_t address, const std::vector<uint8_t> &d) {
   return crc ^ 0xFF; // Return after standard final XOR for CRC8 8H2F/AUTOSAR
 }
 
-unsigned int pedal_checksum(const std::vector<uint8_t> &d) {
+unsigned int volkswagen_crc(uint32_t address, const std::vector<uint8_t> &d) {
+  return volkswagen_crc(address, d.data(), d.size());
+}
+
+unsigned int pedal_checksum(const uint8_t *d, size_t d_size) {
   uint8_t crc = 0xFF;
   uint8_t poly = 0xD5; // standard crc8
 
   // skip checksum byte
-  for (int i = d.size()-2; i >= 0; i--) {
+  for (int i = static_cast<int>(d_size) - 2; i >= 0; i--) {
     crc ^= d[i];
     for (int j = 0; j < 8; j++) {
       if ((crc & 0x80) != 0) {
@@ -186,4 +206,8 @@ unsigned int pedal_checksum(const std::vector<uint8_t> &d) {
     }
   }
   return crc;
+}
+
+unsigned int pedal_checksum(const std::vector<uint8_t> &d) {
+  return pedal_checksum(d.data(), d.size());
 }

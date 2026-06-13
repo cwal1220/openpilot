@@ -36,7 +36,7 @@ uint8_t ModelFrame::sample_plane_mapped(const uint8_t *src, const CpuWarpSample 
   val += static_cast<int>(src[sample.offset[1]]) * sample.weight[1];
   val += static_cast<int>(src[sample.offset[2]]) * sample.weight[2];
   val += static_cast<int>(src[sample.offset[3]]) * sample.weight[3];
-  return static_cast<uint8_t>(std::clamp((val + (1 << (INTER_REMAP_COEF_BITS - 1))) >> INTER_REMAP_COEF_BITS, 0, 255));
+  return static_cast<uint8_t>((val + (1 << (INTER_REMAP_COEF_BITS - 1))) >> INTER_REMAP_COEF_BITS);
 }
 
 void ModelFrame::build_cpu_warp_map(const mat3 &projection, int src_w, int src_h, int dst_w, int dst_h,
@@ -131,18 +131,28 @@ void ModelFrame::prepare_cpu(VisionBuf *buf, const mat3 &projection, float *out)
   float *u = y11 + plane_size;
   float *v = u + plane_size;
 
+  const CpuWarpSample *y_map = cpu_y_map.data();
+  const CpuWarpSample *uv_map = cpu_uv_map.data();
   for (int y2 = 0; y2 < half_h; ++y2) {
+    const int y_row = y2 * half_w;
+    const CpuWarpSample *y_map0 = y_map + (y2 * 2) * MODEL_WIDTH;
+    const CpuWarpSample *y_map1 = y_map0 + MODEL_WIDTH;
+    const CpuWarpSample *uv_map_row = uv_map + y_row;
+    float *y00_row = y00 + y_row;
+    float *y10_row = y10 + y_row;
+    float *y01_row = y01 + y_row;
+    float *y11_row = y11 + y_row;
+    float *u_row = u + y_row;
+    float *v_row = v + y_row;
     for (int x2 = 0; x2 < half_w; ++x2) {
       const int ox = x2 * 2;
-      const int oy = y2 * 2;
-      const int dst = y2 * half_w + x2;
 
-      y00[dst] = static_cast<float>(sample_plane_mapped(buf->y, cpu_y_map[static_cast<size_t>(oy) * MODEL_WIDTH + ox]));
-      y10[dst] = static_cast<float>(sample_plane_mapped(buf->y, cpu_y_map[static_cast<size_t>(oy + 1) * MODEL_WIDTH + ox]));
-      y01[dst] = static_cast<float>(sample_plane_mapped(buf->y, cpu_y_map[static_cast<size_t>(oy) * MODEL_WIDTH + ox + 1]));
-      y11[dst] = static_cast<float>(sample_plane_mapped(buf->y, cpu_y_map[static_cast<size_t>(oy + 1) * MODEL_WIDTH + ox + 1]));
-      u[dst] = static_cast<float>(sample_plane_mapped(buf->u, cpu_uv_map[dst]));
-      v[dst] = static_cast<float>(sample_plane_mapped(buf->v, cpu_uv_map[dst]));
+      y00_row[x2] = static_cast<float>(sample_plane_mapped(buf->y, y_map0[ox]));
+      y10_row[x2] = static_cast<float>(sample_plane_mapped(buf->y, y_map1[ox]));
+      y01_row[x2] = static_cast<float>(sample_plane_mapped(buf->y, y_map0[ox + 1]));
+      y11_row[x2] = static_cast<float>(sample_plane_mapped(buf->y, y_map1[ox + 1]));
+      u_row[x2] = static_cast<float>(sample_plane_mapped(buf->u, uv_map_row[x2]));
+      v_row[x2] = static_cast<float>(sample_plane_mapped(buf->v, uv_map_row[x2]));
     }
   }
 }
@@ -150,7 +160,7 @@ void ModelFrame::prepare_cpu(VisionBuf *buf, const mat3 &projection, float *out)
 float* ModelFrame::prepare(VisionBuf *buf, const mat3 &projection, cl_mem *output) {
   if (!use_cl) {
     assert(output == nullptr);
-    std::memmove(&input_frames[0], &input_frames[MODEL_FRAME_SIZE], sizeof(float) * MODEL_FRAME_SIZE);
+    std::memcpy(&input_frames[0], &input_frames[MODEL_FRAME_SIZE], sizeof(float) * MODEL_FRAME_SIZE);
     prepare_cpu(buf, projection, &input_frames[MODEL_FRAME_SIZE]);
     return &input_frames[0];
   }
@@ -165,7 +175,7 @@ float* ModelFrame::prepare(VisionBuf *buf, const mat3 &projection, cl_mem *outpu
   if (output == NULL) {
     loadyuv_queue(&loadyuv, q, y_cl, u_cl, v_cl, net_input_cl);
 
-    std::memmove(&input_frames[0], &input_frames[MODEL_FRAME_SIZE], sizeof(float) * MODEL_FRAME_SIZE);
+    std::memcpy(&input_frames[0], &input_frames[MODEL_FRAME_SIZE], sizeof(float) * MODEL_FRAME_SIZE);
     CL_CHECK(clEnqueueReadBuffer(q, net_input_cl, CL_TRUE, 0, MODEL_FRAME_SIZE * sizeof(float), &input_frames[MODEL_FRAME_SIZE], 0, nullptr, nullptr));
     clFinish(q);
     return &input_frames[0];

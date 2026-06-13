@@ -169,6 +169,8 @@ void run_model(ModelState &model, VisionIpcClient &vipc_client_main, VisionIpcCl
   const mat3 extra_cam_intrinsics = main_cam_intrinsics;
   const uint64_t model_period_ns = 1000000000ULL / MODEL_FREQ;
   uint64_t next_model_start_ns = 0;
+  uint32_t last_calib_reject_log_count = 0;
+  bool calib_reject_logged = false;
 #else
   (void)main_width;
   (void)main_height;
@@ -274,8 +276,12 @@ void run_model(ModelState &model, VisionIpcClient &vipc_client_main, VisionIpcCl
         live_calib_seen = true;
       } else {
         model_reset_recurrent(&model);
-        LOGE("rejecting K230 calibration rpy_valid=%d warp inbounds %.1f%% min %.1f%%",
-             rpy_valid, inbounds * 100.0f, K230_MIN_WARP_INBOUNDS * 100.0f);
+        if (!calib_reject_logged || run_count - last_calib_reject_log_count >= MODEL_FREQ * 5) {
+          LOGW("rejecting K230 calibration rpy_valid=%d warp inbounds %.1f%% min %.1f%%",
+               rpy_valid, inbounds * 100.0f, K230_MIN_WARP_INBOUNDS * 100.0f);
+          last_calib_reject_log_count = run_count;
+          calib_reject_logged = true;
+        }
       }
 #else
       model_transform_main = candidate_transform_main;

@@ -23,6 +23,7 @@ LAT_MPC_N = 16
 LON_MPC_N = 32
 CONTROL_N = 17
 CAR_ROTATION_RADIUS = 0.0
+T_IDXS_CONTROL = T_IDXS[:CONTROL_N]
 
 # EU guidelines
 MAX_LATERAL_JERK = 5.0
@@ -111,7 +112,7 @@ def get_lag_adjusted_curvature(CP, v_ego, psis, curvatures, curvature_rates):
   # TODO this needs more thought, use .2s extra for now to estimate other delays
   delay = max(0.01, CP.steerActuatorDelay)
   current_curvature = curvatures[0]
-  psi = interp(delay, T_IDXS[:CONTROL_N], psis)
+  psi = interp(delay, T_IDXS_CONTROL, psis)
   desired_curvature_rate = curvature_rates[0]
 
   # MPC can plan to turn the wheel and turn back before t_delay. This means

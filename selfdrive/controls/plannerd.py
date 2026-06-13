@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
+import os
+
 from cereal import car
 from common.params import Params
 from common.realtime import Priority, config_realtime_process
 from selfdrive.swaglog import cloudlog
-from selfdrive.controls.lib.longitudinal_planner import Planner
 from selfdrive.controls.lib.lateral_planner import LateralPlanner
 from selfdrive.hardware import TICI
 import cereal.messaging as messaging
+
+K230_LATERAL_ONLY = os.getenv("K230_LATERAL_ONLY") == "1"
 
 
 def plannerd_thread(sm=None, pm=None):
@@ -22,15 +25,22 @@ def plannerd_thread(sm=None, pm=None):
 
   cloudlog.event("e2e mode", on=use_lanelines)
 
-  longitudinal_planner = Planner(CP)
+  longitudinal_planner = None
+  if not K230_LATERAL_ONLY:
+    from selfdrive.controls.lib.longitudinal_planner import Planner
+    longitudinal_planner = Planner(CP)
   lateral_planner = LateralPlanner(CP, use_lanelines=use_lanelines, wide_camera=wide_camera)
 
   if sm is None:
-    sm = messaging.SubMaster(['carState', 'controlsState', 'radarState', 'modelV2'],
-                             poll=['radarState', 'modelV2'], ignore_avg_freq=['radarState'])
+    services = ['carState', 'controlsState', 'modelV2']
+    if K230_LATERAL_ONLY:
+      sm = messaging.SubMaster(services, poll=['modelV2'])
+    else:
+      sm = messaging.SubMaster(services + ['radarState'],
+                               poll=['radarState', 'modelV2'], ignore_avg_freq=['radarState'])
 
   if pm is None:
-    pm = messaging.PubMaster(['longitudinalPlan', 'lateralPlan'])
+    pm = messaging.PubMaster(['lateralPlan'] if K230_LATERAL_ONLY else ['longitudinalPlan', 'lateralPlan'])
 
   while True:
     sm.update()
@@ -38,8 +48,9 @@ def plannerd_thread(sm=None, pm=None):
     if sm.updated['modelV2']:
       lateral_planner.update(sm, CP)
       lateral_planner.publish(sm, pm)
-      longitudinal_planner.update(sm, CP)
-      longitudinal_planner.publish(sm, pm)
+      if not K230_LATERAL_ONLY:
+        longitudinal_planner.update(sm, CP)
+        longitudinal_planner.publish(sm, pm)
 
 
 def main(sm=None, pm=None):

@@ -15,6 +15,7 @@ import common.log as trace1
 LongitudinalPlanSource = log.LongitudinalPlan.LongitudinalPlanSource
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
+T_IDXS_CONTROL = T_IDXS[:CONTROL_N]
 
 # As per ISO 15622:2018 for all speeds
 ACCEL_MIN_ISO = -4.0  # m/s^2
@@ -64,8 +65,9 @@ class LongControl():
     self.long_plan_source = ""
 
     self.candidate = candidate
-    self.long_log = Params().get_bool("LongLogDisplay")
-    self.stopping_dist = float(Decimal(Params().get("StoppingDist", encoding="utf8"))*Decimal('0.1'))
+    self.params = Params()
+    self.long_log = self.params.get_bool("LongLogDisplay")
+    self.stopping_dist = float(Decimal(self.params.get("StoppingDist", encoding="utf8"))*Decimal('0.1'))
 
     self.vRel_prev = 0
     self.decel_damping = 1.0
@@ -84,18 +86,18 @@ class LongControl():
     self.loc_timer += 1
     if self.loc_timer > 100:
       self.loc_timer = 0
-      self.long_log = Params().get_bool("LongLogDisplay")
+      self.long_log = self.params.get_bool("LongLogDisplay")
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
     # Interp control trajectory
     speeds = long_plan.speeds
     if len(speeds) == CONTROL_N:
-      v_target = interp(t_since_plan, T_IDXS[:CONTROL_N], speeds)
-      a_target = interp(t_since_plan, T_IDXS[:CONTROL_N], long_plan.accels)
+      v_target = interp(t_since_plan, T_IDXS_CONTROL, speeds)
+      a_target = interp(t_since_plan, T_IDXS_CONTROL, long_plan.accels)
 
-      v_target_lower = interp(CP.longitudinalActuatorDelayLowerBound + t_since_plan, T_IDXS[:CONTROL_N], speeds)
+      v_target_lower = interp(CP.longitudinalActuatorDelayLowerBound + t_since_plan, T_IDXS_CONTROL, speeds)
       a_target_lower = 2 * (v_target_lower - v_target) / CP.longitudinalActuatorDelayLowerBound - a_target
 
-      v_target_upper = interp(CP.longitudinalActuatorDelayUpperBound + t_since_plan, T_IDXS[:CONTROL_N], speeds)
+      v_target_upper = interp(CP.longitudinalActuatorDelayUpperBound + t_since_plan, T_IDXS_CONTROL, speeds)
       a_target_upper = 2 * (v_target_upper - v_target) / CP.longitudinalActuatorDelayUpperBound - a_target
       a_target = min(a_target_lower, a_target_upper)
 

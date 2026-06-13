@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -11,12 +12,12 @@
 #include "common.h"
 
 
-int64_t get_raw_value(const std::vector<uint8_t> &msg, const Signal &sig) {
+int64_t get_raw_value(const uint8_t *msg, size_t msg_size, const Signal &sig) {
   int64_t ret = 0;
 
   int i = sig.msb / 8;
   int bits = sig.size;
-  while (i >= 0 && i < msg.size() && bits > 0) {
+  while (i >= 0 && i < msg_size && bits > 0) {
     int lsb = (int)(sig.lsb / 8) == i ? sig.lsb : i*8;
     int msb = (int)(sig.msb / 8) == i ? sig.msb : (i+1)*8 - 1;
     int size = msb - lsb + 1;
@@ -31,12 +32,11 @@ int64_t get_raw_value(const std::vector<uint8_t> &msg, const Signal &sig) {
 }
 
 
-bool MessageState::parse(uint64_t sec, const std::vector<uint8_t> &dat) {
-
+bool MessageState::parse(uint64_t sec, const uint8_t *dat, size_t dat_size) {
   for (int i = 0; i < parse_sigs.size(); i++) {
     auto &sig = parse_sigs[i];
 
-    int64_t tmp = get_raw_value(dat, sig);
+    int64_t tmp = get_raw_value(dat, dat_size, sig);
     if (sig.is_signed) {
       tmp -= ((tmp >> (sig.size-1)) & 0x1) ? (1ULL << sig.size) : 0;
     }
@@ -45,17 +45,17 @@ bool MessageState::parse(uint64_t sec, const std::vector<uint8_t> &dat) {
 
     bool checksum_failed = false;
     if (!ignore_checksum) {
-      if (sig.type == SignalType::HONDA_CHECKSUM && honda_checksum(address, dat) != tmp) {
+      if (sig.type == SignalType::HONDA_CHECKSUM && honda_checksum(address, dat, dat_size) != tmp) {
         checksum_failed = true;
-      } else if (sig.type == SignalType::TOYOTA_CHECKSUM && toyota_checksum(address, dat) != tmp) {
+      } else if (sig.type == SignalType::TOYOTA_CHECKSUM && toyota_checksum(address, dat, dat_size) != tmp) {
         checksum_failed = true;
-      } else if (sig.type == SignalType::VOLKSWAGEN_CHECKSUM && volkswagen_crc(address, dat) != tmp) {
+      } else if (sig.type == SignalType::VOLKSWAGEN_CHECKSUM && volkswagen_crc(address, dat, dat_size) != tmp) {
         checksum_failed = true;
-      } else if (sig.type == SignalType::SUBARU_CHECKSUM && subaru_checksum(address, dat) != tmp) {
+      } else if (sig.type == SignalType::SUBARU_CHECKSUM && subaru_checksum(address, dat, dat_size) != tmp) {
         checksum_failed = true;
-      } else if (sig.type == SignalType::CHRYSLER_CHECKSUM && chrysler_checksum(address, dat) != tmp) {
+      } else if (sig.type == SignalType::CHRYSLER_CHECKSUM && chrysler_checksum(address, dat, dat_size) != tmp) {
         checksum_failed = true;
-      } else if (sig.type == SignalType::PEDAL_CHECKSUM && pedal_checksum(dat) != tmp) {
+      } else if (sig.type == SignalType::PEDAL_CHECKSUM && pedal_checksum(dat, dat_size) != tmp) {
         checksum_failed = true;
       }
     }
@@ -74,9 +74,12 @@ bool MessageState::parse(uint64_t sec, const std::vector<uint8_t> &dat) {
 
     // TODO: these may get updated if the invalid or checksum gets checked later
     vals[i] = tmp * sig.factor + sig.offset;
-    all_vals[i].push_back(vals[i]);
+    if (track_all_values) {
+      all_vals[i].push_back(vals[i]);
+    }
   }
   seen = sec;
+  updated = true;
 
   return true;
 }
@@ -102,7 +105,8 @@ bool MessageState::update_counter_generic(int64_t v, int cnt_size) {
 
 CANParser::CANParser(int abus, const std::string& dbc_name,
           const std::vector<MessageParseOptions> &options,
-          const std::vector<SignalParseOptions> &sigoptions)
+          const std::vector<SignalParseOptions> &sigoptions,
+          bool track_all_values)
   : bus(abus), aligned_buf(kj::heapArray<capnp::word>(1024)) {
 
   dbc = dbc_lookup(dbc_name);
@@ -114,6 +118,7 @@ CANParser::CANParser(int abus, const std::string& dbc_name,
   for (const auto& op : options) {
     MessageState &state = message_states[op.address];
     state.address = op.address;
+    state.track_all_values = track_all_values;
     // state.check_frequency = op.check_frequency,
 
     // msg is not valid if a message isn't received for 10 consecutive steps
@@ -165,6 +170,12 @@ CANParser::CANParser(int abus, const std::string& dbc_name,
       }
     }
   }
+
+  for (auto &kv : message_states) {
+    if (kv.second.check_threshold > 0) {
+      checked_message_states.push_back(&kv.second);
+    }
+  }
 }
 
 CANParser::CANParser(int abus, const std::string& dbc_name, bool ignore_checksum, bool ignore_counter)
@@ -205,8 +216,8 @@ void CANParser::update_string(const std::string &data, bool sendcan) {
   memcpy(aligned_buf.begin(), data.data(), data.length());
 
   // extract the messages
-  capnp::FlatArrayMessageReader cmsg(aligned_buf.slice(0, buf_size));
-  cereal::Event::Reader event = cmsg.getRoot<cereal::Event>();
+  capnp::FlatArrayMessageReader msg_reader(aligned_buf.slice(0, buf_size));
+  cereal::Event::Reader event = msg_reader.getRoot<cereal::Event>();
 
   last_sec = event.getLogMonoTime();
 
@@ -216,22 +227,39 @@ void CANParser::update_string(const std::string &data, bool sendcan) {
   UpdateValid(last_sec);
 }
 
+void update_string_parsers(const std::vector<CANParser *> &parsers, const std::string &data, bool sendcan) {
+  const size_t buf_size = (data.length() / sizeof(capnp::word)) + 1;
+  static thread_local kj::Array<capnp::word> aligned_buf;
+  if (aligned_buf.size() < buf_size) {
+    aligned_buf = kj::heapArray<capnp::word>(buf_size);
+  }
+  memcpy(aligned_buf.begin(), data.data(), data.length());
+
+  capnp::FlatArrayMessageReader msg_reader(aligned_buf.slice(0, buf_size));
+  cereal::Event::Reader event = msg_reader.getRoot<cereal::Event>();
+
+  const uint64_t sec = event.getLogMonoTime();
+  auto cans = sendcan ? event.getSendcan() : event.getCan();
+
+  for (CANParser *parser : parsers) {
+    parser->last_sec = sec;
+    parser->UpdateCans(sec, cans);
+  }
+}
+
 void CANParser::UpdateCans(uint64_t sec, const capnp::List<cereal::CanData>::Reader& cans) {
   DEBUG("got %d messages\n", cans.size());
   bool bus_empty = true;
 
-  // parse the messages
   for (int i = 0; i < cans.size(); i++) {
     auto cmsg = cans[i];
     if (cmsg.getSrc() != bus) {
-      // DEBUG("skip %d: wrong bus\n", cmsg.getAddress());
       continue;
     }
     bus_empty = false;
 
     auto state_it = message_states.find(cmsg.getAddress());
     if (state_it == message_states.end()) {
-      // DEBUG("skip %d: not specified\n", cmsg.getAddress());
       continue;
     }
 
@@ -248,12 +276,9 @@ void CANParser::UpdateCans(uint64_t sec, const capnp::List<cereal::CanData>::Rea
     //  continue;
     //}
 
-    std::vector<uint8_t> data(dat.size(), 0);
-    memcpy(data.data(), dat.begin(), dat.size());
-    state_it->second.parse(sec, data);
+    state_it->second.parse(sec, dat.begin(), dat.size());
   }
 
-  // update bus timeout
   if (!bus_empty) {
     last_nonempty_sec = sec;
   }
@@ -278,15 +303,13 @@ void CANParser::UpdateCans(uint64_t sec, const capnp::DynamicStruct::Reader& cms
 
   auto dat = cmsg.get("dat").as<capnp::Data>();
   if (dat.size() > 64) return; // shouldn't ever happen
-  std::vector<uint8_t> data(dat.size(), 0);
-  memcpy(data.data(), dat.begin(), dat.size());
-  state_it->second.parse(sec, data);
+  state_it->second.parse(sec, dat.begin(), dat.size());
 }
 
 void CANParser::UpdateValid(uint64_t sec) {
   can_valid = true;
-  for (const auto& kv : message_states) {
-    const auto& state = kv.second;
+  for (const auto *state_ptr : checked_message_states) {
+    const auto& state = *state_ptr;
     if (state.check_threshold > 0 && (sec - state.seen) > state.check_threshold && sec > 105000000000) {
       // opkr
       char chk_cmd[100];
@@ -310,10 +333,14 @@ void CANParser::UpdateValid(uint64_t sec) {
 
 std::vector<SignalValue> CANParser::query_latest() {
   std::vector<SignalValue> ret;
+  ret.reserve(message_states.size() * 4);
 
   for (auto& kv : message_states) {
     auto& state = kv.second;
-    if (last_sec != 0 && state.seen != last_sec) continue;
+    if (last_sec != 0 && state.seen != last_sec) {
+      state.updated = false;
+      continue;
+    }
 
     for (int i = 0; i < state.parse_sigs.size(); i++) {
       const Signal &sig = state.parse_sigs[i];
@@ -321,10 +348,39 @@ std::vector<SignalValue> CANParser::query_latest() {
         .address = state.address,
         .name = sig.name,
         .value = state.vals[i],
-        .all_values = state.all_vals[i],
+        .all_values = std::move(state.all_vals[i]),
       });
-      state.all_vals[i].clear();
+      if (state.track_all_values) {
+        state.all_vals[i].clear();
+      }
     }
+    state.updated = false;
+  }
+
+  return ret;
+}
+
+std::vector<SignalValue> CANParser::query_updated() {
+  std::vector<SignalValue> ret;
+  ret.reserve(message_states.size() * 4);
+
+  for (auto& kv : message_states) {
+    auto& state = kv.second;
+    if (!state.updated) continue;
+
+    for (int i = 0; i < state.parse_sigs.size(); i++) {
+      const Signal &sig = state.parse_sigs[i];
+      ret.push_back((SignalValue){
+        .address = state.address,
+        .name = sig.name,
+        .value = state.vals[i],
+        .all_values = std::move(state.all_vals[i]),
+      });
+      if (state.track_all_values) {
+        state.all_vals[i].clear();
+      }
+    }
+    state.updated = false;
   }
 
   return ret;

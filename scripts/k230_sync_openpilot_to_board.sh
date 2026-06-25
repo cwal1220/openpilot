@@ -32,4 +32,12 @@ rsync_args=(
 
 rsync "${rsync_args[@]}" -e "$RSYNC_RSH" "$ROOT/" "$BOARD:$DEST/"
 
-"${SSH[@]}" "$BOARD" "rm -rf '$DEST'/.git && chmod +x '$DEST'/scripts/k230_*.sh"
+"${SSH[@]}" "$BOARD" "
+  set -e
+  rm -rf '$DEST'/.git
+  chmod +x '$DEST'/scripts/k230_*.sh
+  cd '$DEST'/third_party/k230_v4l2_drm
+  gcc -shared -fPIC -O2 -g -Iinclude -Isrc -I/usr/include/libdrm src/display.c -ldrm -o libdisplay.so.tmp
+  install -m 0755 libdisplay.so.tmp libdisplay.so
+  rm -f libdisplay.so.tmp
+"
